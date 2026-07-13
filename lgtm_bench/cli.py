@@ -29,7 +29,7 @@ def run(
     runner: str = typer.Option("claude-code", help="claude-code | mock"),
     concurrency: int = typer.Option(2),
     variants: Optional[str] = typer.Option(None, help="variant id filter (csv)"),
-    task_filter: Optional[str] = typer.Option(None, help="substring filter on task ids"),
+    task_filter: Optional[str] = typer.Option(None, help="csv of task-id substrings (OR)"),
     timeout: int = typer.Option(300, help="per-trial timeout (s)"),
     fixtures: Path = typer.Option(Path("fixtures")),
 ):
@@ -38,7 +38,8 @@ def run(
         conditions=[Condition(c) for c in _csv(conditions)],
         trials=trials, runner_name=runner, concurrency=concurrency,
         variant_filter=_csv(variants) if variants else None,
-        task_filter=task_filter, timeout_s=timeout, fixtures_root=fixtures,
+        task_filter=_csv(task_filter) if task_filter else None,
+        timeout_s=timeout, fixtures_root=fixtures,
         lexicon_dir=Path("rules/lexicons") if Path("rules/lexicons").exists() else None,
     )
     out_path = execute_run(cfg)

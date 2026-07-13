@@ -45,7 +45,7 @@ class RunConfig:
     runner_name: str = "claude-code"
     concurrency: int = 2
     variant_filter: Optional[list[str]] = None
-    task_filter: Optional[str] = None  # substring match on task id
+    task_filter: Optional[list[str]] = None  # OR of substring matches on task id
     timeout_s: int = 300
     run_id: str = ""
     fixtures_root: Path = Path("fixtures")
@@ -66,7 +66,7 @@ def build_grid(tasks: list[TaskSpec], cfg: RunConfig, cfg_hash: str) -> list[Tri
     grid: list[TrialSpec] = []
     for model in cfg.models:
         for task in tasks:
-            if cfg.task_filter and cfg.task_filter not in task.id:
+            if cfg.task_filter and not any(s in task.id for s in cfg.task_filter):
                 continue
             conds = [c for c in task.conditions if c in cfg.conditions]
             for condition in conds:

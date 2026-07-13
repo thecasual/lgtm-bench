@@ -29,7 +29,16 @@ class ResultStore:
         return keys
 
     def append(self, record: TrialRecord) -> None:
+        # A crash can leave a torn final line with no trailing newline;
+        # appending straight onto it would corrupt both records. Heal first.
+        needs_newline = False
+        if self.path.exists() and self.path.stat().st_size > 0:
+            with open(self.path, "rb") as rf:
+                rf.seek(-1, os.SEEK_END)
+                needs_newline = rf.read(1) != b"\n"
         with open(self.path, "a") as f:
+            if needs_newline:
+                f.write("\n")
             f.write(record.model_dump_json() + "\n")
             f.flush()
             os.fsync(f.fileno())
