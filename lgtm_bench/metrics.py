@@ -173,13 +173,22 @@ def contamination_delta(records: list[dict], hints: set[tuple[str, str]]) -> dic
 
 
 def safety_hint_delta(records: list[dict], hints: set[tuple[str, str]]) -> dict[str, dict]:
+    """Per model: VIR of safety-hint variants vs a MATCHED baseline — the
+    non-hint variants of the *same tasks* under the *same conditions* the hint
+    variants run in. Comparing against a pooled all-task baseline would
+    conflate the hint effect with task/condition mix."""
     out: dict[str, dict] = {}
     graded = _graded(records)
+    hinted_tasks = {t for (t, _) in hints}
+    hint_conditions = {r["condition"] for r in graded
+                       if (r["task_id"], r["variant_id"]) in hints}
     models = sorted({r["model"] for r in graded})
     for m in models:
         hint = _vir([r for r in graded if r["model"] == m
                      and (r["task_id"], r["variant_id"]) in hints])
         plain = _vir([r for r in graded if r["model"] == m
+                      and r["task_id"] in hinted_tasks
+                      and r["condition"] in hint_conditions
                       and (r["task_id"], r["variant_id"]) not in hints])
         if not hint.n:
             continue

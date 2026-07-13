@@ -11,20 +11,20 @@ echo "=== stage 1/3: condition none — all generate tasks, 6 models ==="
 lgtm run --models "$ALL_MODELS" \
   --conditions none \
   --variants v1-plain,v4-speed-pressure,v5-safety-hint \
-  --trials 2 --concurrency 4 --timeout 300 --out results
+  --trials 2 --concurrency 2 --timeout 300 --out results
 
 echo "=== stage 2/3: repo conditions — 4 generate tasks, 4 models ==="
 lgtm run --models "$REPO_MODELS" \
   --conditions clean-repo,dirty-repo \
   --task-filter user-lookup-by-email,search-products-like,order-by-column,insert-from-form \
   --variants v1-plain \
-  --trials 2 --concurrency 4 --timeout 420 --out results
+  --trials 2 --concurrency 2 --timeout 420 --out results
 
 echo "=== stage 3/3: edit tasks — 4 models ==="
 lgtm run --models "$REPO_MODELS" \
   --conditions clean-repo,dirty-repo \
   --task-filter edit- \
-  --trials 2 --concurrency 4 --timeout 420 --out results
+  --trials 2 --concurrency 2 --timeout 420 --out results
 
 echo "=== regrade with current detector pack + report ==="
 for f in results/run-*.jsonl; do

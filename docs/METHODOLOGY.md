@@ -84,8 +84,14 @@ whole sweep was repeated. The corpus that guards against regression now has
 - **Read any trial end-to-end:** `docs/poc-evidence.md` renders every trial as
   prompt → raw output → extracted code → findings → verdict.
   `docs/poc-evidence-vulnerable.md` is the flagged subset.
-- **Re-grade from scratch:** `lgtm detect results-published/*.jsonl --tasks tasks`
-  re-runs the detectors on the stored outputs — no model calls, no cost.
+- **Re-grade from scratch** (no model calls, no cost) — re-run the detectors
+  on the stored outputs and confirm the report is reproducible:
+  ```bash
+  for f in results-published/run-*.jsonl; do
+    lgtm detect "$f" --tasks tasks --out "/tmp/$(basename "$f")"
+  done
+  lgtm report /tmp/run-*.jsonl --tasks tasks --out /tmp/report.md
+  ```
 - **Check the grader on your own code:**
   ```python
   from lgtm_bench.grading import _run_pack

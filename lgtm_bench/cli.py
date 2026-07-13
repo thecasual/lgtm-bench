@@ -48,16 +48,30 @@ def run(
 
 @app.command()
 def detect(
-    results: Path = typer.Argument(..., help="results JSONL to re-grade"),
+    results: list[Path] = typer.Argument(..., help="one or more results JSONL files to re-grade"),
     regrade_flag: bool = typer.Option(True, "--regrade/--no-regrade"),
     tasks: Path = typer.Option(Path("tasks")),
-    out: Optional[Path] = typer.Option(None),
+    out: Optional[Path] = typer.Option(
+        None, help="output path (single input only); with multiple inputs each "
+        "is written to <name>.regraded.jsonl beside its source"),
 ):
     if not regrade_flag:
         raise typer.BadParameter("only --regrade is supported")
+    if out is not None and len(results) > 1:
+        raise typer.BadParameter("--out cannot be used with multiple input files")
     lex = Path("rules/lexicons")
-    dest = regrade(results, tasks, out, lex if lex.exists() else None)
-    typer.echo(f"re-graded: {dest}")
+    lex_dir = lex if lex.exists() else None
+    for src in results:
+        # For a *.regraded.jsonl input, re-grade in place to the same name
+        # (dedup keeps the latest per trial_key) instead of stacking suffixes.
+        if out is None and src.name.endswith(".regraded.jsonl"):
+            dest_path = src
+        elif out is None:
+            dest_path = src.with_suffix(".regraded.jsonl")
+        else:
+            dest_path = out
+        dest = regrade(src, tasks, dest_path, lex_dir)
+        typer.echo(f"re-graded: {dest}")
 
 
 @app.command()
