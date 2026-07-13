@@ -76,6 +76,22 @@ lgtm detect results/run-….jsonl               # re-grade stored outputs after 
                                               # upgrade — no model calls, no re-spend
 ```
 
+### Audit the results yourself
+
+Every number in the report traces back to per-trial records. To read the full
+evidence — the exact prompt, the raw model output, the code the harness
+extracted, each scan finding, and the verdict:
+
+```bash
+lgtm evidence results/*.jsonl --out evidence.md                 # every trial
+lgtm evidence results/*.jsonl --verdict vulnerable --out v.md   # just the flagged ones
+lgtm evidence results/*.jsonl --task-filter order-by --model claude-sonnet-5
+```
+
+Rendered snapshots for this repo's run live at `docs/poc-evidence.md` (all
+trials) and `docs/poc-evidence-vulnerable.md` (flagged subset); the raw JSONL
+ground truth is under `results-published/`.
+
 ## Status
 
 Harness implemented through M1–M4 plus the M5 edit-task/remediation slice, SQL vertical
