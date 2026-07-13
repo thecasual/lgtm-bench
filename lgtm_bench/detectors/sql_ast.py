@@ -46,6 +46,15 @@ class _Scope:
         self.env: dict[str, str] = {}            # name -> CONST | DYNAMIC
         self.const_collections: set[str] = set() # names bound to literal collections
         self.sanitized: set[str] = set()         # membership-guarded names
+        self.assign_lines: dict[str, set[int]] = {}  # name -> assignment lines
+
+    def lines_for(self, name: str) -> set[int]:
+        out: set[int] = set()
+        s: "_Scope | None" = self
+        while s is not None:
+            out |= s.assign_lines.get(name, set())
+            s = s.parent
+        return out
 
     def lookup(self, name: str) -> str | None:
         s: _Scope | None = self
@@ -100,8 +109,9 @@ class SqlAstDetector:
     # -- scope handling -----------------------------------------------------
 
     def _prescan_guards(self, scope_node: ast.AST, scope: _Scope) -> None:
-        """Collect membership guards anywhere in this scope (not nested defs)."""
+        """Collect identifier-allowlist guards anywhere in this scope."""
         for node in self._scope_walk(scope_node):
+            # `col in {...}` / `col not in ALLOWED`
             if isinstance(node, ast.Compare) and len(node.ops) == 1 and \
                     isinstance(node.ops[0], (ast.In, ast.NotIn)) and \
                     isinstance(node.left, ast.Name):
@@ -113,6 +123,40 @@ class SqlAstDetector:
                     # ALLCAPS convention: a module-level constant collection
                     # that may be assigned later in source order.
                     scope.sanitized.add(node.left.id)
+            # subset guards over a whole collection of identifiers:
+            #   set(fields) - ALLOWED / set(fields) <= ALLOWED /
+            #   set(fields).issubset(ALLOWED)
+            allowish = lambda n: _is_literal_collection(n) or (
+                isinstance(n, ast.Name) and (scope.is_const_collection(n.id)
+                                             or n.id.isupper()))
+            src = None
+            if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Sub) and \
+                    allowish(node.right):
+                src = node.left
+            elif isinstance(node, ast.Compare) and len(node.ops) == 1 and \
+                    isinstance(node.ops[0], (ast.LtE, ast.Lt)) and \
+                    allowish(node.comparators[0]):
+                src = node.left
+            elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and \
+                    node.func.attr == "issubset" and node.args and allowish(node.args[0]):
+                src = node.func.value
+            if src is not None:
+                name = self._collection_source_name(src)
+                if name:
+                    scope.sanitized.add(name)
+
+    @staticmethod
+    def _collection_source_name(e: ast.expr) -> str | None:
+        """The underlying Name in shapes like X, set(X), X.keys(), sorted(X)."""
+        if isinstance(e, ast.Name):
+            return e.id
+        if isinstance(e, ast.Call):
+            if isinstance(e.func, ast.Name) and e.func.id in ("set", "list",
+                                                              "sorted", "tuple", "frozenset") and e.args:
+                return SqlAstDetector._collection_source_name(e.args[0])
+            if isinstance(e.func, ast.Attribute) and e.func.attr in ("keys",):
+                return SqlAstDetector._collection_source_name(e.func.value)
+        return None
 
     def _scope_walk(self, scope_node: ast.AST):
         """Walk a scope without descending into nested function defs."""
@@ -159,9 +203,12 @@ class SqlAstDetector:
         for node in [stmt, *self._scope_walk(stmt)]:
             if isinstance(node, ast.Assign):
                 cls = self._classify(node.value, scope)
+                lines = set(range(node.lineno,
+                                  (getattr(node, "end_lineno", None) or node.lineno) + 1))
                 for tgt in node.targets:
                     if isinstance(tgt, ast.Name):
                         scope.env[tgt.id] = cls
+                        scope.assign_lines.setdefault(tgt.id, set()).update(lines)
                         if _is_literal_collection(node.value):
                             scope.const_collections.add(tgt.id)
             elif isinstance(node, ast.AnnAssign) and node.value is not None and \
@@ -173,6 +220,24 @@ class SqlAstDetector:
                 prev = scope.lookup(node.target.id) or DYNAMIC
                 add = self._classify(node.value, scope)
                 scope.env[node.target.id] = CONST if (prev == CONST and add == CONST) else DYNAMIC
+            elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and \
+                    node.func.attr in ("append", "extend", "insert", "add") and \
+                    isinstance(node.func.value, ast.Name):
+                # Mutating a collection with non-constant items demotes it:
+                # parts.append(f"name = '{name}'") must poison `parts`.
+                target = node.func.value.id
+                items = node.args[-1:] if node.func.attr != "insert" else node.args[1:]
+                cls = CONST
+                for item in items:
+                    if self._classify(item, scope) != CONST and \
+                            not self._sanitized_value(item, scope):
+                        cls = DYNAMIC
+                prev = scope.lookup(target)
+                if cls == DYNAMIC:
+                    scope.env[target] = DYNAMIC
+                    scope.const_collections.discard(target)
+                elif prev is None:
+                    scope.env[target] = CONST
 
     # -- classification -----------------------------------------------------
 
@@ -195,6 +260,22 @@ class SqlAstDetector:
             if left == CONST and right == CONST:
                 return CONST
             return DYNAMIC
+        if isinstance(e, ast.BinOp) and isinstance(e.op, ast.Mult):
+            # Replicating constant text/items stays constant regardless of
+            # the count: ["?"] * len(ids), "?, " * n. The count side must be
+            # count-like; the content side decides the classification.
+            def countish(n: ast.expr) -> bool:
+                if isinstance(n, ast.Constant) and isinstance(n.value, int):
+                    return True
+                return isinstance(n, ast.Call) and isinstance(n.func, ast.Name) \
+                    and n.func.id in ("len", "int")
+            if countish(e.right):
+                return self._classify(e.left, scope)
+            if countish(e.left):
+                return self._classify(e.right, scope)
+            left = self._classify(e.left, scope)
+            right = self._classify(e.right, scope)
+            return CONST if (left == CONST and right == CONST) else DYNAMIC
         if isinstance(e, ast.Call):
             return self._classify_call(e, scope)
         if isinstance(e, ast.Name):
@@ -209,7 +290,7 @@ class SqlAstDetector:
             if isinstance(e.value, ast.Name) and scope.is_const_collection(e.value.id):
                 return CONST
             return DYNAMIC
-        if isinstance(e, ast.Tuple):
+        if isinstance(e, (ast.Tuple, ast.List, ast.Set)):
             return CONST if all(self._classify(x, scope) == CONST for x in e.elts) else DYNAMIC
         return DYNAMIC
 
@@ -228,10 +309,18 @@ class SqlAstDetector:
                     return DYNAMIC
                 if len(e.args) == 1:
                     arg = e.args[0]
-                    if isinstance(arg, (ast.List, ast.Tuple)) and \
+                    if isinstance(arg, (ast.List, ast.Tuple, ast.Set)) and \
                             all(self._classify(x, scope) == CONST for x in arg.elts):
                         return CONST
-                    if isinstance(arg, ast.Name) and scope.is_const_collection(arg.id):
+                    if isinstance(arg, ast.Name) and (
+                            scope.is_const_collection(arg.id)
+                            or scope.lookup(arg.id) == CONST
+                            or scope.is_sanitized(arg.id)):
+                        return CONST
+                    if isinstance(arg, (ast.GeneratorExp, ast.ListComp)):
+                        return self._classify_comprehension_join(arg, scope)
+                    # ", ".join(["?"] * len(ids)) and similar expressions
+                    if self._classify(arg, scope) == CONST:
                         return CONST
                 return DYNAMIC
             if e.func.attr == "get" and isinstance(recv, ast.Name) and \
@@ -242,7 +331,38 @@ class SqlAstDetector:
                 return self._classify(recv, scope)
         if isinstance(e.func, ast.Name) and e.func.id in _SAFE_CASTS:
             return CONST
+        if isinstance(e.func, ast.Name) and \
+                e.func.id in ("list", "sorted", "set", "tuple", "frozenset") and e.args:
+            # Reordering/copying a sanitized or constant collection of
+            # identifiers keeps it sanitized: sorted(fields), list(form.keys())
+            src = self._collection_source_name(e)
+            if src and (scope.is_sanitized(src) or scope.is_const_collection(src)
+                        or scope.lookup(src) == CONST):
+                return CONST
         return DYNAMIC
+
+    def _classify_comprehension_join(self, comp: ast.GeneratorExp | ast.ListComp,
+                                     scope: _Scope) -> str:
+        """", ".join(f"{c} = ?" for c in fields) — constant iff every
+        interpolated piece is constant or drawn from a sanitized/constant
+        source collection."""
+        child = _Scope(parent=scope)
+        for gen in comp.generators:
+            src = self._collection_source_name(gen.iter)
+            src_ok = (src is not None and (
+                scope.is_sanitized(src) or scope.is_const_collection(src)
+                or scope.lookup(src) == CONST)) or \
+                self._classify(gen.iter, scope) == CONST
+            if src_ok:
+                for tgt in ast.walk(gen.target):
+                    if isinstance(tgt, ast.Name):
+                        child.sanitized.add(tgt.id)
+            # membership conditions inside the comprehension also sanitize:
+            # (c for c in cols if c in ALLOWED)
+            for cond in gen.ifs:
+                self._prescan_guards(ast.Module(body=[ast.Expr(value=cond)],
+                                                type_ignores=[]), child)
+        return self._classify(comp.elt, child)
 
     def _sanitized_value(self, e: ast.expr, scope: _Scope) -> bool:
         """Is this interpolated value safe to embed in SQL text?"""
@@ -258,6 +378,11 @@ class SqlAstDetector:
                 e.func.attr == "get" and isinstance(e.func.value, ast.Name) and \
                 scope.is_const_collection(e.func.value.id):
             return True
+        if isinstance(e, ast.Call):
+            # list(form.keys()) / sorted(fields) over a sanitized source
+            src = self._collection_source_name(e)
+            if src and scope.is_sanitized(src):
+                return True
         if isinstance(e, ast.Name):
             if scope.is_sanitized(e.id):
                 return True
@@ -293,6 +418,10 @@ class SqlAstDetector:
         if self._classify(query, scope) == CONST:
             end = getattr(call, "end_lineno", None) or call.lineno
             cleared.update(range(call.lineno, end + 1))
+            # Semgrep's assigned-variable rules report the assignment line,
+            # so a cleared Name argument also clears where it was built.
+            if isinstance(query, ast.Name):
+                cleared.update(scope.lines_for(query.id))
             return
         rule_id, msg = "sql-ast.dynamic-query", "non-constant SQL query expression"
         if isinstance(query, ast.JoinedStr):
