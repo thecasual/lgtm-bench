@@ -148,7 +148,7 @@ def execute_run(cfg: RunConfig) -> Path:
                                cfg.trials, HARNESS_VERSION)
     out_path = cfg.out_dir / f"run-{cfg_hash}.jsonl"
     store = ResultStore(out_path)
-    done = store.existing_keys()
+    done = store.completed_keys()  # errored trials are retried on resume
 
     grid = build_grid(tasks, cfg, cfg_hash)
     todo = [s for s in grid if s.key not in done]
@@ -196,8 +196,9 @@ def regrade(results_path: Path, tasks_root: Path, out_path: Optional[Path] = Non
     src = ResultStore(results_path)
     dest_path = out_path or results_path.with_suffix(".regraded.jsonl")
     # Read everything BEFORE touching dest: with dest == source, unlinking
-    # first would destroy the run's raw outputs irrecoverably.
-    records = src.load()
+    # first would destroy the run's raw outputs irrecoverably. Dedup so a
+    # retried trial's successful record supersedes its earlier error row.
+    records = src.load(dedup=True)
     if not records and results_path.resolve() == dest_path.resolve():
         raise ValueError(f"refusing in-place regrade of unreadable/empty {results_path}")
     if dest_path.exists():

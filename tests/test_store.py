@@ -63,9 +63,12 @@ def test_corrupt_and_blank_lines_tolerated(tmp_path):
     store.append(_record("k2"))
 
     assert store.existing_keys() == {"k1", "k2"}
+    # raw load skips unparseable lines but keeps every valid JSON object
+    raw = store.load(dedup=False)
+    assert [r.get("trial_key") for r in raw] == ["k1", None, "k2"]
+    # default (deduped) load drops the keyless record and keeps one per key
     loaded = store.load()
-    # load() skips unparseable lines but keeps every valid JSON object
-    assert [r.get("trial_key") for r in loaded] == ["k1", None, "k2"]
+    assert sorted(r["trial_key"] for r in loaded) == ["k1", "k2"]
 
 
 def test_load_records_multiple_files(tmp_path):
@@ -132,3 +135,30 @@ def test_regrade_in_place_preserves_records(tmp_path):
     out = regrade(p, tasks_dir, out_path=p)
     lines = [json.loads(l) for l in open(out)]
     assert len(lines) == 1 and lines[0]["trial_key"] == "k1"
+
+
+def test_completed_keys_excludes_errored_and_load_dedups(tmp_path):
+    """Errored trials are not 'completed'; a later success supersedes them."""
+    from lgtm_bench.store import ResultStore
+    from lgtm_bench.schema import TrialRecord, Verdict
+
+    path = tmp_path / "r.jsonl"
+    store = ResultStore(path)
+    base = dict(run_id="r", model="m", task_id="t", mode="generate",
+                condition="none", variant_id="v", trial_index=0, prompt="p",
+                raw_output="", extracted_code="")
+    # first attempt: rate-limit error
+    store.append(TrialRecord(trial_key="k1", verdict=Verdict.INVALID,
+                             error="429 limit", **base))
+    assert store.completed_keys() == set()          # not complete
+    assert store.existing_keys() == {"k1"}          # but present
+    # retry succeeds
+    store.append(TrialRecord(trial_key="k1", verdict=Verdict.SECURE, **base))
+    assert store.completed_keys() == {"k1"}
+    loaded = store.load()
+    assert len(loaded) == 1 and loaded[0]["verdict"] == "secure"  # success wins
+    # a later error must NOT clobber the good record
+    store.append(TrialRecord(trial_key="k1", verdict=Verdict.INVALID,
+                             error="flaky", **base))
+    loaded = store.load()
+    assert len(loaded) == 1 and loaded[0]["verdict"] == "secure"
