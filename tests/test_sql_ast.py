@@ -262,6 +262,213 @@ def test_query_builder_that_is_also_executed_is_not_double_reported():
     assert findings[0].rule_id == "sql-ast.dynamic-variable-query"
 
 
+# -- BUG #2: positive-membership blocklist vs accept branch -------------------
+
+def test_positive_membership_blocklist_is_flagged():
+    code = """\
+        BLOCKED = {"password", "ssn"}
+
+        def get_col(cur, col):
+            if col in BLOCKED:
+                raise ValueError()
+            cur.execute(f"SELECT {col} FROM users")
+        """
+    findings = _scan(code)
+    assert len(findings) == 1
+    assert findings[0].rule_id == "sql-ast.fstring-query"
+
+
+def test_positive_membership_accept_branch_body_sink_stays_clean():
+    code = """\
+        def get_col(cur, col):
+            if col in {"name", "email", "id"}:
+                cur.execute(f"SELECT {col} FROM users")
+                return cur.fetchall()
+            raise ValueError()
+        """
+    assert _scan(code) == []
+
+
+def test_accept_branch_does_not_sanitize_after_the_if():
+    # Positive membership validates x only INSIDE the body; a sink after the
+    # `if` is still tainted.
+    code = """\
+        def get_col(cur, col):
+            if col in {"name", "email", "id"}:
+                pass
+            cur.execute(f"SELECT {col} FROM users")
+        """
+    findings = _scan(code)
+    assert len(findings) == 1
+    assert findings[0].rule_id == "sql-ast.fstring-query"
+
+
+# -- BUG #3: unenforced membership expression ---------------------------------
+
+def test_unenforced_membership_expression_is_flagged():
+    code = """\
+        def get_col(cur, col):
+            is_valid = col in {"name", "email", "id"}
+            cur.execute(f"SELECT {col} FROM users")
+        """
+    findings = _scan(code)
+    assert len(findings) == 1
+    assert findings[0].rule_id == "sql-ast.fstring-query"
+
+
+def test_enforced_reject_membership_stays_clean():
+    code = """\
+        def get_col(cur, col):
+            if col not in {"name", "email", "id"}:
+                raise ValueError()
+            cur.execute(f"SELECT {col} FROM users")
+        """
+    assert _scan(code) == []
+
+
+# -- BUG #4: blocklist vs allowlist comprehension filter ----------------------
+
+def test_not_in_comprehension_filter_is_a_blocklist_flagged():
+    code = """\
+        FORBIDDEN = {"password", "ssn"}
+
+        def select_cols(cur, user_cols):
+            cols = [c for c in user_cols if c not in FORBIDDEN]
+            cur.execute(f"SELECT {', '.join(cols)} FROM t")
+        """
+    findings = _scan(code)
+    assert findings
+    assert findings[0].rule_id == "sql-ast.fstring-query"
+
+
+def test_in_comprehension_filter_is_an_allowlist_clean():
+    code = """\
+        ALLOW = {"id", "name", "email"}
+
+        def select_cols(cur, user_cols):
+            cols = [c for c in user_cols if c in ALLOW]
+            cur.execute(f"SELECT {', '.join(cols)} FROM t")
+        """
+    assert _scan(code) == []
+
+
+# -- BUG #5: .keys()/.values() comparator over a const collection -------------
+
+def test_keys_comparator_over_allowlist_is_clean():
+    code = """\
+        ALLOWED = {"name": "users.name", "email": "users.email"}
+
+        def get_col(cur, col):
+            if col not in ALLOWED.keys():
+                raise ValueError()
+            cur.execute(f"SELECT {col} FROM users")
+        """
+    assert _scan(code) == []
+
+
+def test_keys_comparator_over_user_dict_is_flagged():
+    code = """\
+        def get_col(cur, col, user_dict):
+            if col not in user_dict.keys():
+                raise ValueError()
+            cur.execute(f"SELECT {col} FROM users")
+        """
+    findings = _scan(code)
+    assert len(findings) == 1
+    assert findings[0].rule_id == "sql-ast.fstring-query"
+
+
+# -- BUG #6: constant default parameter as allowlist --------------------------
+
+def test_const_default_param_is_an_allowlist():
+    code = """\
+        def create_user(conn, form, allowed_fields=("email", "name")):
+            columns = [f for f in allowed_fields if f in form]
+            values = [form[f] for f in columns]
+            marks = ", ".join(["?"] * len(columns))
+            conn.execute(
+                f"INSERT INTO users ({', '.join(columns)}) VALUES ({marks})",
+                values,
+            )
+        """
+    assert _scan(code) == []
+
+
+def test_param_without_default_stays_tainted():
+    code = """\
+        def create_user(conn, form, allowed_fields):
+            columns = [f for f in allowed_fields if f in form]
+            values = [form[f] for f in columns]
+            marks = ", ".join(["?"] * len(columns))
+            conn.execute(
+                f"INSERT INTO users ({', '.join(columns)}) VALUES ({marks})",
+                values,
+            )
+        """
+    findings = _scan(code)
+    assert findings
+    assert findings[0].rule_id == "sql-ast.fstring-query"
+
+
+def test_param_with_nonconstant_default_stays_tainted():
+    code = """\
+        def create_user(conn, form, allowed_fields=list(load_fields())):
+            columns = [f for f in allowed_fields if f in form]
+            cols = ", ".join(columns)
+            conn.execute(f"INSERT INTO users ({cols}) VALUES (1)")
+        """
+    findings = _scan(code)
+    assert findings
+
+
+# -- BUG #11: ifexp temp-var sanitizes only the result ------------------------
+
+def test_ifexp_tempvar_raw_operand_interpolated_is_flagged():
+    code = """\
+        def f(cur, col):
+            safe_col = col if col in ("name", "price") else "name"
+            cur.execute(f"SELECT * FROM products ORDER BY {col}")
+        """
+    findings = _scan(code)
+    assert len(findings) == 1
+    assert findings[0].rule_id == "sql-ast.fstring-query"
+
+
+def test_ifexp_tempvar_result_interpolated_stays_clean():
+    code = """\
+        def f(cur, col):
+            safe_col = col if col in ("name", "price") else "name"
+            cur.execute(f"SELECT * FROM products ORDER BY {safe_col}")
+        """
+    assert _scan(code) == []
+
+
+# -- BUG #12: constructor-built allowlist --------------------------------------
+
+def test_constructor_allowlist_membership_guard_is_clean():
+    code = """\
+        def get_col(cur, col):
+            allowed = set(("name", "email", "id"))
+            if col not in allowed:
+                raise ValueError()
+            cur.execute(f"SELECT {col} FROM users")
+        """
+    assert _scan(code) == []
+
+
+def test_constructor_over_nonliteral_arg_stays_tainted():
+    code = """\
+        def get_col(cur, col, extra):
+            allowed = set(extra)
+            if col not in allowed:
+                raise ValueError()
+            cur.execute(f"SELECT {col} FROM users")
+        """
+    findings = _scan(code)
+    assert len(findings) == 1
+    assert findings[0].rule_id == "sql-ast.fstring-query"
+
+
 # -- raw-sql artifact ---------------------------------------------------------
 
 def test_raw_sql_with_placeholder_has_no_findings():

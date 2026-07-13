@@ -41,6 +41,20 @@ def _is_literal_collection(node: ast.AST) -> bool:
     return False
 
 
+def _is_const_collection_value(node: ast.AST) -> bool:
+    """True for a value that builds a constant identifier allowlist: a literal
+    collection, or a constructor call wrapping one — ``set(("a","b"))``,
+    ``frozenset({...})``, ``tuple([...])``, ``list((...))``. Constructors nest,
+    so ``frozenset(set(("a",)))`` also qualifies."""
+    if _is_literal_collection(node):
+        return True
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and \
+            node.func.id in ("set", "frozenset", "tuple", "list") and \
+            len(node.args) == 1 and not node.keywords:
+        return _is_const_collection_value(node.args[0])
+    return False
+
+
 class _Scope:
     """Best-effort, source-order model of one function/module scope."""
 
@@ -168,7 +182,7 @@ class SqlAstDetector:
             if self._has_schema_string(value):
                 schema_sources.add(target)
         for target, value in assigns:
-            if _is_literal_collection(value) or \
+            if _is_const_collection_value(value) or \
                     self._is_schema_allowlist(value, schema_sources):
                 scope.const_collections.add(target)
 
@@ -195,22 +209,25 @@ class SqlAstDetector:
         return False
 
     def _prescan_guards(self, scope_node: ast.AST, scope: _Scope) -> None:
-        """Collect identifier-allowlist guards anywhere in this scope."""
+        """Collect identifier-allowlist guards that actually gate flow.
+
+        A single-name membership test (``x in ALLOW`` / ``x not in ALLOW``)
+        sanitizes ``x`` for code AFTER the ``if`` ONLY when it is a *reject*
+        branch — negative membership whose body unconditionally exits
+        (``if x not in ALLOW: raise``). The *accept* branch case
+        (``if x in ALLOW:`` — sink inside the body) is handled during the walk
+        so the sanitization is scoped to the body, not the whole function.
+        Positive-membership-with-exit is a BLOCKLIST (``if x in BLOCKED:
+        raise``) and does NOT sanitize; an unenforced membership expression
+        (``is_valid = x in {...}``) does not gate flow and does NOT sanitize.
+
+        Subset guards over a whole collection (``set(fields) - ALLOWED``,
+        ``set(fields) <= ALLOWED``, ``set(fields).issubset(ALLOWED)``) are
+        order-independent allowlist checks and stay recognized wherever they
+        appear (assignment or ``if`` test)."""
         for node in self._scope_walk(scope_node):
-            # `col in {...}` / `col not in ALLOWED`, also seeing through a
-            # case-normalizing call: `col.upper() not in {"ASC","DESC"}`.
-            if isinstance(node, ast.Compare) and len(node.ops) == 1 and \
-                    isinstance(node.ops[0], (ast.In, ast.NotIn)):
-                guarded = self._guarded_name(node.left)
-                comp = node.comparators[0]
-                if guarded is not None:
-                    if _is_literal_collection(comp) or (
-                            isinstance(comp, ast.Name) and scope.is_const_collection(comp.id)):
-                        scope.sanitized.add(guarded)
-                    elif isinstance(comp, ast.Name) and comp.id.isupper():
-                        # ALLCAPS convention: a module-level constant collection
-                        # that may be assigned later in source order.
-                        scope.sanitized.add(guarded)
+            if isinstance(node, ast.If):
+                self._process_if_guard(node, scope)
             # subset guards over a whole collection of identifiers:
             #   set(fields) - ALLOWED / set(fields) <= ALLOWED /
             #   set(fields).issubset(ALLOWED)
@@ -232,6 +249,72 @@ class SqlAstDetector:
                 name = self._collection_source_name(src)
                 if name:
                     scope.sanitized.add(name)
+
+    def _process_if_guard(self, node: ast.If, scope: _Scope) -> None:
+        """Reject-branch allowlist: ``if x not in ALLOW: <exit>`` validates x
+        for all code after the ``if``. Positive membership with an exiting body
+        is a blocklist and is intentionally NOT sanitized here."""
+        if not self._body_exits(node.body):
+            return
+        for guarded, positive in self._membership_guards_in_test(node.test, scope):
+            if not positive:
+                scope.sanitized.add(guarded)
+
+    def _accept_branch_names(self, node: ast.If, scope: _Scope) -> set[str]:
+        """Accept-branch allowlist: ``if x in ALLOW:`` validates x for the code
+        INSIDE the body only. A body that rejects *immediately* (its first
+        statement is a bare raise/return/continue/break guard clause) is a
+        blocklist instead (``if x in BLOCKED: raise``) and validates nothing;
+        an accept branch does real work — including the sink — before any
+        return."""
+        if self._body_rejects_immediately(node.body):
+            return set()
+        out: set[str] = set()
+        for guarded, positive in self._membership_guards_in_test(node.test, scope):
+            if positive:
+                out.add(guarded)
+        return out
+
+    @staticmethod
+    def _body_exits(body: list[ast.stmt]) -> bool:
+        """True if the block unconditionally leaves the surrounding flow via a
+        top-level raise/return/continue/break (statements after it are dead, so
+        the reject path is taken for every value that reaches the test). Used
+        for the negative-membership reject branch (``if x not in ALLOW: ...
+        raise``), where validation holds for all code after the ``if``."""
+        return any(isinstance(s, (ast.Raise, ast.Return, ast.Continue, ast.Break))
+                   for s in body)
+
+    @staticmethod
+    def _body_rejects_immediately(body: list[ast.stmt]) -> bool:
+        """True if the block is a pure guard clause: its FIRST statement is an
+        unconditional exit. Distinguishes a positive-membership blocklist
+        (``if x in BLOCKED: raise``) from an accept branch that uses x first."""
+        return bool(body) and isinstance(
+            body[0], (ast.Raise, ast.Return, ast.Continue, ast.Break))
+
+    def _membership_guards_in_test(self, test: ast.expr, scope: _Scope):
+        """Yield ``(name, is_positive)`` for each single-name membership guard
+        in an ``if`` test against a recognized allowlist. ``is_positive`` is
+        True for ``x in ALLOW`` and False for ``x not in ALLOW``."""
+        if isinstance(test, ast.Compare) and len(test.ops) == 1 and \
+                isinstance(test.ops[0], (ast.In, ast.NotIn)):
+            guarded = self._guarded_name(test.left)
+            comp = test.comparators[0]
+            if guarded is not None and self._is_allowlist_comparator(comp, scope):
+                yield guarded, isinstance(test.ops[0], ast.In)
+
+    def _is_allowlist_comparator(self, comp: ast.expr, scope: _Scope) -> bool:
+        """Is the right-hand side of a membership test a constant allowlist? A
+        literal collection, a const/schema/dict const-collection name, an
+        ALLCAPS module constant, or a ``NAME.keys()``/``.values()`` view over
+        such a collection (BUG #5)."""
+        if _is_literal_collection(comp):
+            return True
+        src = self._collection_source_name(comp)
+        if src is not None and (scope.is_const_collection(src) or src.isupper()):
+            return True
+        return False
 
     @staticmethod
     def _guarded_name(e: ast.expr) -> str | None:
@@ -307,10 +390,19 @@ class SqlAstDetector:
         # query without ever reaching execute() (query-builder helpers).
         self._check_query_sink(stmt, scope, code, findings)
 
-        # Recurse into nested statement bodies in order.
+        # Recurse into nested statement bodies in order. For an `if x in ALLOW:`
+        # accept-branch guard the guarded name is sanitized only WITHIN the body
+        # (not the orelse, not code after the if): add it for the body recursion
+        # and remove it afterward.
+        accept_names: set[str] = set()
+        if isinstance(stmt, ast.If):
+            accept_names = self._accept_branch_names(stmt, scope) - scope.sanitized
         for field in self._BODY_FIELDS:
+            added = accept_names if field == "body" else set()
+            scope.sanitized |= added
             for child in getattr(stmt, field, []) or []:
                 self._walk_stmt(child, scope, code, findings, cleared)
+            scope.sanitized -= added
         for handler in getattr(stmt, "handlers", []) or []:
             self._walk_body(handler.body, scope, code, findings, cleared)
 
@@ -351,9 +443,31 @@ class SqlAstDetector:
             for a in (args.vararg, args.kwarg):
                 if a is not None:
                     child.local_binds.add(a.arg)
+            # A parameter whose DEFAULT is a constant collection is an allowlist
+            # inside the body (BUG #6): `def f(..., allowed=("a","b")): ...`.
+            # A parameter with no default (or a non-constant default) stays
+            # tainted — it is NOT recorded as a const-collection.
+            for name, default in self._param_defaults(args):
+                if _is_const_collection_value(default):
+                    child.const_collections.add(name)
         self._prescan_const_collections(fn, child)
         self._prescan_guards(fn, child)
         self._walk_body(fn.body, child, code, findings, cleared)  # type: ignore[attr-defined]
+
+    @staticmethod
+    def _param_defaults(args: ast.arguments):
+        """Yield ``(param_name, default_node)`` for parameters that carry a
+        default. Positional defaults align to the tail of posonly+args;
+        keyword-only defaults align to kwonlyargs (None where absent)."""
+        positional = list(getattr(args, "posonlyargs", None) or []) + list(args.args or [])
+        defaults = list(args.defaults or [])
+        if defaults:
+            for a, d in zip(positional[-len(defaults):], defaults):
+                yield a.arg, d
+        for a, d in zip(getattr(args, "kwonlyargs", None) or [],
+                        getattr(args, "kw_defaults", None) or []):
+            if d is not None:
+                yield a.arg, d
 
     def _sanitize_for_target(self, node: ast.stmt, scope: _Scope) -> None:
         src = self._collection_source_name(node.iter)
@@ -382,19 +496,27 @@ class SqlAstDetector:
             comp_collection = isinstance(
                 node.value, (ast.ListComp, ast.SetComp, ast.DictComp)) and cls == CONST
             schema_allowlist = self._is_schema_allowlist(node.value)
+            # A value that is itself safe to interpolate makes the variable safe
+            # to interpolate — e.g. an allowlist-guarded conditional expression
+            # bound to a temp before use (`safe = col if col in ALLOW else "x"`;
+            # BUG #11 safe twin). Only the RESULT temp is blessed, never the raw
+            # operand.
+            value_ok = cls != CONST and self._sanitized_value(node.value, scope)
             for tgt in node.targets:
                 if isinstance(tgt, ast.Name):
                     scope.env[tgt.id] = cls
                     scope.assign_lines.setdefault(tgt.id, set()).update(lines)
-                    if _is_literal_collection(node.value) or comp_collection \
+                    if _is_const_collection_value(node.value) or comp_collection \
                             or schema_allowlist:
                         scope.const_collections.add(tgt.id)
                     else:
                         scope.const_collections.discard(tgt.id)
+                    if value_ok:
+                        scope.sanitized.add(tgt.id)
         elif isinstance(node, ast.AnnAssign) and node.value is not None and \
                 isinstance(node.target, ast.Name):
             scope.env[node.target.id] = self._classify(node.value, scope)
-            if _is_literal_collection(node.value):
+            if _is_const_collection_value(node.value):
                 scope.const_collections.add(node.target.id)
         elif isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name):
             prev = scope.lookup(node.target.id) or DYNAMIC
@@ -556,11 +678,14 @@ class SqlAstDetector:
                     child.local_binds.add(tgt.id)
                     if src_ok:
                         child.sanitized.add(tgt.id)
-            # membership conditions inside the comprehension also sanitize:
-            # (c for c in cols if c in ALLOWED)
+            # POSITIVE membership conditions inside the comprehension sanitize:
+            # (c for c in cols if c in ALLOWED). A `not in FORBIDDEN` filter is a
+            # blocklist and must NOT sanitize c (BUG #4). The allowlist name is
+            # resolved in the enclosing scope; the target is blessed in `child`.
             for cond in gen.ifs:
-                self._prescan_guards(ast.Module(body=[ast.Expr(value=cond)],
-                                                type_ignores=[]), child)
+                for guarded, positive in self._membership_guards_in_test(cond, scope):
+                    if positive:
+                        child.sanitized.add(guarded)
         # A dict comprehension iterated by join()/for yields its KEYS.
         elt = comp.key if isinstance(comp, ast.DictComp) else comp.elt
         return self._classify(elt, child)

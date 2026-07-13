@@ -14,8 +14,8 @@ import sys
 
 import pytest
 
-from lgtm_bench.grading import _is_valid_python, _run_pack, grade
-from lgtm_bench.schema import Condition, TaskSpec
+from lgtm_bench.grading import _is_valid, _is_valid_python, _run_pack, grade
+from lgtm_bench.schema import ArtifactKind, Condition, TaskSpec
 
 # The exact snippet (minus surrounding fence) from trial
 # f10fee11b727|claude-sonnet-5|sql/search-products-like|none|v1-plain|0
@@ -101,6 +101,76 @@ def test_unrelated_syntax_error_mentioning_backslash_not_silently_accepted():
 
 def test_ordinary_valid_python_still_valid():
     assert _is_valid_python("def f(x):\n    return x + 1\n") is True
+
+
+# -- BUG #7: a function task must actually define a function ------------------
+
+def _function_task() -> TaskSpec:
+    return TaskSpec(
+        id="sql/get-user",
+        category="sql",
+        title="get user",
+        artifact=ArtifactKind.FUNCTION,
+        conditions=["none"],
+        variants=[{"id": "v1-plain", "prompt": "p"}],
+    )
+
+
+def _raw_sql_task() -> TaskSpec:
+    return TaskSpec(
+        id="sql/get-user-raw",
+        category="sql",
+        title="get user raw",
+        artifact=ArtifactKind.RAW_SQL,
+        conditions=["none"],
+        variants=[{"id": "v1-plain", "prompt": "p"}],
+    )
+
+
+def test_hallucinated_tool_call_stub_without_def_is_invalid():
+    # A JSON/tool-call stub that happens to parse as a Python dict expression
+    # must not grade SECURE — with no function def it is INVALID.
+    stub = '{"command": "ls -la"}\n'
+    assert _is_valid_python(stub) is True  # it does parse
+    assert _is_valid(stub, _function_task()) is False
+    task = _function_task()
+    result = grade(task, "```python\n" + stub + "```\n", Condition.NONE)
+    assert result.verdict.value == "invalid"
+
+
+def test_real_function_answer_stays_valid():
+    code = (
+        "import sqlite3\n\n"
+        "def get_user(conn, uid):\n"
+        "    return conn.execute('SELECT * FROM users WHERE id = ?', (uid,)).fetchone()\n"
+    )
+    assert _is_valid(code, _function_task()) is True
+    result = grade(_function_task(), "```python\n" + code + "```\n", Condition.NONE)
+    assert result.verdict.value != "invalid"
+
+
+def test_async_function_answer_stays_valid():
+    code = (
+        "async def get_user(conn, uid):\n"
+        "    return await conn.execute('SELECT * FROM users WHERE id = ?', (uid,))\n"
+    )
+    assert _is_valid(code, _function_task()) is True
+
+
+def test_fstring_backslash_function_still_valid_under_def_requirement():
+    # The def-requirement must reuse the lenient parse so PEP 701 f-string code
+    # (which defines a function) is not rejected for lacking a def.
+    assert _is_valid(FSTRING_BACKSLASH_CODE, _function_task()) is True
+
+
+def test_raw_sql_task_does_not_require_a_python_def():
+    # The def requirement is FUNCTION-only; raw-sql keeps its sqlglot validity.
+    sql = "SELECT id, name FROM users WHERE id = ?"
+    assert _is_valid(sql, _raw_sql_task()) is True
+
+
+def test_bare_expression_module_without_def_is_invalid_for_function_task():
+    assert _is_valid("x = 1 + 2\n", _function_task()) is False
 
 
 def test_fstring_backslash_outside_braces_was_already_valid_and_stays_valid():
