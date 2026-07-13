@@ -24,11 +24,111 @@ class GradeResult:
     detector_pack_version: str = ""
 
 
+def _neutralize_fstring_expr_backslashes(text: str) -> str:
+    """Strip backslash characters that appear inside the {...} expression
+    parts of an f-string token's source text (leaving {{ / }} literal-brace
+    escapes and everything outside braces untouched). Operates on a single
+    STRING token's raw text (prefix + quotes + body)."""
+    result: list[str] = []
+    depth = 0
+    i, n = 0, len(text)
+    while i < n:
+        ch = text[i]
+        if depth == 0:
+            if ch == "{" and i + 1 < n and text[i + 1] == "{":
+                result.append("{{")
+                i += 2
+                continue
+            if ch == "}" and i + 1 < n and text[i + 1] == "}":
+                result.append("}}")
+                i += 2
+                continue
+            if ch == "{":
+                depth = 1
+            result.append(ch)
+            i += 1
+        else:
+            if ch == "{":
+                depth += 1
+                result.append(ch)
+                i += 1
+                continue
+            if ch == "}":
+                depth -= 1
+                result.append(ch)
+                i += 1
+                continue
+            if ch == "\\":
+                i += 1  # drop the backslash; keep scanning the expression
+                continue
+            result.append(ch)
+            i += 1
+    return "".join(result)
+
+
+def _neutralize_fstring_backslashes(source: str) -> str:
+    """Rewrite every f-string literal in `source` so backslashes inside its
+    {...} expression parts are removed, without touching anything else.
+    Used only to probe validity under PEP 701 (Python 3.12+) syntax that a
+    3.11 `ast.parse` rejects; the original, untouched `code` is what actually
+    gets graded."""
+    import io
+    import tokenize
+
+    try:
+        tokens = list(tokenize.generate_tokens(io.StringIO(source).readline))
+    except (tokenize.TokenError, IndentationError, SyntaxError):
+        return source
+
+    lines = source.splitlines(keepends=True)
+    cum = [0]
+    for line in lines:
+        cum.append(cum[-1] + len(line))
+
+    def offset(row: int, col: int) -> int:
+        return cum[row - 1] + col
+
+    edits: list[tuple[int, int, str]] = []
+    for tok in tokens:
+        if tok.type != tokenize.STRING:
+            continue
+        prefix = re.match(r"^[A-Za-z]*", tok.string).group(0)
+        if "f" not in prefix.lower():
+            continue
+        new_text = _neutralize_fstring_expr_backslashes(tok.string)
+        if new_text != tok.string:
+            edits.append((offset(*tok.start), offset(*tok.end), new_text))
+
+    if not edits:
+        return source
+    edits.sort(key=lambda e: e[0], reverse=True)
+    result = source
+    for start, end, new_text in edits:
+        result = result[:start] + new_text + result[end:]
+    return result
+
+
 def _is_valid_python(code: str) -> bool:
     try:
         ast.parse(code)
         return True
-    except SyntaxError:
+    except SyntaxError as e:
+        # PEP 701 (Python 3.12+) lifted the pre-3.12 restriction that an
+        # f-string expression part ({...}) cannot contain a backslash. Code
+        # using that (now-legal, common) construct is a SyntaxError under
+        # the harness's 3.11 interpreter but is valid, correctly-fenced
+        # Python. Detect exactly this restriction and, if neutralizing the
+        # offending backslashes makes the code parse, accept it as valid.
+        # Any other SyntaxError (genuinely broken code) still fails.
+        msg = str(e).lower()
+        if "backslash" in msg and "f-string" in msg:
+            transformed = _neutralize_fstring_backslashes(code)
+            if transformed != code:
+                try:
+                    ast.parse(transformed)
+                    return True
+                except SyntaxError:
+                    return False
         return False
 
 

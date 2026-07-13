@@ -50,6 +50,12 @@ class _Scope:
         self.const_collections: set[str] = set() # names bound to literal collections
         self.sanitized: set[str] = set()         # membership-guarded names
         self.assign_lines: dict[str, set[int]] = {}  # name -> assignment lines
+        # Names bound *locally* by this scope's own binding forms (function
+        # params, for-loop targets, comprehension targets). Such a binding
+        # SHADOWS any same-named binding in an enclosing scope: a parent's
+        # sanitization / constness must not leak onto a distinct local
+        # variable that merely reuses the identifier.
+        self.local_binds: set[str] = set()
 
     def lines_for(self, name: str) -> set[int]:
         out: set[int] = set()
@@ -64,6 +70,8 @@ class _Scope:
         while s is not None:
             if name in s.env:
                 return s.env[name]
+            if name in s.local_binds:
+                return None  # locally bound here; do not consult the parent
             s = s.parent
         return None
 
@@ -72,6 +80,8 @@ class _Scope:
         while s is not None:
             if name in s.const_collections:
                 return True
+            if name in s.local_binds:
+                return False  # locally bound here; do not consult the parent
             s = s.parent
         return False
 
@@ -80,6 +90,8 @@ class _Scope:
         while s is not None:
             if name in s.sanitized:
                 return True
+            if name in s.local_binds:
+                return False  # locally bound here; do not consult the parent
             s = s.parent
         return False
 
@@ -104,6 +116,15 @@ class SqlAstDetector:
             return [], set()  # invalidity is decided upstream, not by detectors
         findings: list[Finding] = []
         cleared: set[int] = set()
+        # Names passed as the query argument to an execute-family call anywhere
+        # in the tree. The return/assignment sink skips such names so a query
+        # that is *both* built-and-executed is not double-reported.
+        self._exec_names: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
+                    and node.func.attr in EXEC_METHODS and node.args \
+                    and isinstance(node.args[0], ast.Name):
+                self._exec_names.add(node.args[0].id)
         module_scope = _Scope()
         self._prescan_const_collections(tree, module_scope)
         self._prescan_guards(tree, module_scope)
@@ -282,6 +303,10 @@ class SqlAstDetector:
         for call in self._inline_calls(stmt):
             self._check_call(call, scope, code, findings, cleared)
 
+        # Grade a tainted SQL string that is RETURNED or assigned as the final
+        # query without ever reaching execute() (query-builder helpers).
+        self._check_query_sink(stmt, scope, code, findings)
+
         # Recurse into nested statement bodies in order.
         for field in self._BODY_FIELDS:
             for child in getattr(stmt, field, []) or []:
@@ -314,6 +339,18 @@ class SqlAstDetector:
     def _enter_function(self, fn: ast.AST, scope: _Scope, code: str,
                         findings: list[Finding], cleared: set[int]) -> None:
         child = _Scope(parent=scope)
+        # Parameters are locally bound and thus shadow any enclosing-scope
+        # binding of the same name (a module-level `k` marked sanitized must
+        # not bless a function parameter also named `k`).
+        args = getattr(fn, "args", None)
+        if args is not None:
+            for group in (getattr(args, "posonlyargs", None), args.args,
+                          getattr(args, "kwonlyargs", None)):
+                for a in group or []:
+                    child.local_binds.add(a.arg)
+            for a in (args.vararg, args.kwarg):
+                if a is not None:
+                    child.local_binds.add(a.arg)
         self._prescan_const_collections(fn, child)
         self._prescan_guards(fn, child)
         self._walk_body(fn.body, child, code, findings, cleared)  # type: ignore[attr-defined]
@@ -324,9 +361,13 @@ class SqlAstDetector:
             scope.is_sanitized(src) or scope.is_const_collection(src)
             or scope.lookup(src) == CONST)) or \
             self._classify(node.iter, scope) == CONST
-        if src_ok:
-            for tgt in ast.walk(node.target):
-                if isinstance(tgt, ast.Name):
+        for tgt in ast.walk(node.target):
+            if isinstance(tgt, ast.Name):
+                # A for-target is a local binding: it shadows any enclosing
+                # sanitization of the same name (recorded even when the source
+                # is not an allowlist, so an unvalidated loop var stays tainted).
+                scope.local_binds.add(tgt.id)
+                if src_ok:
                     scope.sanitized.add(tgt.id)
 
     def _record_stmt_assignment(self, node: ast.stmt, scope: _Scope) -> None:
@@ -470,7 +511,14 @@ class SqlAstDetector:
                 return DYNAMIC
             if e.func.attr == "get" and isinstance(recv, ast.Name) and \
                     scope.is_const_collection(recv.id):
-                # dict-allowlist lookup: SORT_COLS.get(col, "name")
+                # dict-allowlist lookup: SORT_COLS.get(col, "name"). Safe only
+                # when the fallback is itself constant/sanitized — a
+                # user-controlled default (SORT_COLS.get(col, user_val)) flows
+                # straight into SQL for any key absent from the allowlist.
+                if len(e.args) >= 2 and \
+                        self._classify(e.args[1], scope) != CONST and \
+                        not self._sanitized_value(e.args[1], scope):
+                    return DYNAMIC
                 return CONST
             if e.func.attr in ("strip", "rstrip", "lstrip", "upper", "lower"):
                 return self._classify(recv, scope)
@@ -501,9 +549,12 @@ class SqlAstDetector:
                 scope.is_sanitized(src) or scope.is_const_collection(src)
                 or scope.lookup(src) == CONST)) or \
                 self._classify(gen.iter, scope) == CONST
-            if src_ok:
-                for tgt in ast.walk(gen.target):
-                    if isinstance(tgt, ast.Name):
+            for tgt in ast.walk(gen.target):
+                if isinstance(tgt, ast.Name):
+                    # Comprehension targets are local bindings: they shadow any
+                    # enclosing-scope sanitization of the same identifier.
+                    child.local_binds.add(tgt.id)
+                    if src_ok:
                         child.sanitized.add(tgt.id)
             # membership conditions inside the comprehension also sanitize:
             # (c for c in cols if c in ALLOWED)
@@ -534,6 +585,12 @@ class SqlAstDetector:
         if isinstance(e, ast.Call) and isinstance(e.func, ast.Attribute) and \
                 e.func.attr == "get" and isinstance(e.func.value, ast.Name) and \
                 scope.is_const_collection(e.func.value.id):
+            # ALLOW.get(key) / ALLOW.get(key, <const>) is safe; a
+            # user-controlled fallback flows through unchecked.
+            if len(e.args) >= 2 and \
+                    self._classify(e.args[1], scope) != CONST and \
+                    not self._sanitized_value(e.args[1], scope):
+                return False
             return True
         if isinstance(e, ast.Call):
             # list(form.keys()) / sorted(fields) over a sanitized source
@@ -548,11 +605,26 @@ class SqlAstDetector:
             if scope.lookup(e.id) == CONST:
                 return True
         if isinstance(e, ast.IfExp):
-            # e.g. col if col in ALLOWED else "id"
+            # e.g. col if col in ALLOWED else "id". A membership test blesses
+            # the expression ONLY when both branch VALUES are safe: a constant,
+            # the very name the test guards, or independently sanitized. A
+            # branch returning a *different* unvalidated name (e.g.
+            # `sort_col if direction in (...) else sort_col`) is still tainted.
             test = e.test
             if isinstance(test, ast.Compare) and len(test.ops) == 1 and \
                     isinstance(test.ops[0], (ast.In, ast.NotIn)):
-                return True
+                guarded = self._guarded_name(test.left)
+
+                def _branch_ok(b: ast.expr) -> bool:
+                    if isinstance(b, ast.Constant):
+                        return True
+                    if guarded is not None and isinstance(b, ast.Name) and \
+                            b.id == guarded:
+                        return True
+                    return self._sanitized_value(b, scope)
+
+                if _branch_ok(e.body) and _branch_ok(e.orelse):
+                    return True
         return False
 
     # -- exec-call check ----------------------------------------------------
@@ -597,6 +669,69 @@ class SqlAstDetector:
             detector=self.name, rule_id=rule_id, message=msg,
             line=getattr(call, "lineno", None),
             snippet=(snippet or "")[:200] or None))
+
+    # -- return / assignment sink -------------------------------------------
+
+    # SQL statement keywords that mark a string as query text rather than an
+    # ordinary value. ``ORDER\s+BY`` matches "ORDER BY" across arbitrary space.
+    _SQL_KW_RE = re.compile(
+        r"\b(SELECT|INSERT|UPDATE|DELETE|WHERE|ORDER\s+BY|SET|FROM)\b", re.I)
+
+    @staticmethod
+    def _node_sql_text(node: ast.expr) -> str:
+        """All string-constant fragments within an expression, concatenated —
+        the literal SQL skeleton of an f-string / concat / join build."""
+        parts: list[str] = []
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Constant) and isinstance(sub.value, str):
+                parts.append(sub.value)
+        return " ".join(parts)
+
+    def _check_query_sink(self, stmt: ast.stmt, scope: _Scope, code: str,
+                          findings: list[Finding]) -> None:
+        """Conservatively flag a ``return <expr>`` / ``name = <expr>`` that
+        builds SQL text with tainted interpolation but is never executed here.
+
+        Only fires when a query-bearing sub-expression classifies DYNAMIC and
+        its literal skeleton contains a SQL keyword; a constant/parameterized/
+        allowlisted build classifies CONST and is left alone."""
+        if isinstance(stmt, ast.Return) and stmt.value is not None:
+            value: ast.expr = stmt.value
+            target_name: str | None = None
+        elif isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and \
+                isinstance(stmt.targets[0], ast.Name):
+            value = stmt.value
+            target_name = stmt.targets[0].id
+        else:
+            return
+        # If the value is (or wraps) an execute-family call, _check_call has
+        # already graded it — do not double-report.
+        for sub in ast.walk(value):
+            if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute) \
+                    and sub.func.attr in EXEC_METHODS:
+                return
+        # A variable that is separately executed elsewhere is reported at the
+        # execute() call; skip its build assignment to avoid double-counting.
+        if target_name is not None and target_name in self._exec_names:
+            return
+        # Consider the query string components: for a returned/assigned tuple
+        # (query, params) only the query element matters, not the params.
+        candidates = list(value.elts) if isinstance(value, (ast.Tuple, ast.List)) \
+            else [value]
+        for cand in candidates:
+            if self._classify(cand, scope) != DYNAMIC:
+                continue
+            text = self._node_sql_text(cand)
+            if not text or not self._SQL_KW_RE.search(text):
+                continue
+            snippet = ast.get_source_segment(code, stmt)
+            findings.append(Finding(
+                detector=self.name, rule_id="sql-ast.tainted-query-builder",
+                message="tainted value interpolated into a returned/assigned "
+                        "SQL query string",
+                line=getattr(stmt, "lineno", None),
+                snippet=(snippet or "")[:200] or None))
+            return  # one finding per statement
 
     # -- raw SQL ------------------------------------------------------------
 

@@ -128,6 +128,140 @@ def test_executemany_with_constant_query_clean():
     assert _scan(code) == []
 
 
+# -- BUG A: local-binding shadowing of parent sanitization --------------------
+
+def test_local_comprehension_var_shadows_module_sanitization():
+    # Trailing dead module code marks module `k` sanitized; the function's own
+    # comprehension `k` is a distinct binding and must stay tainted.
+    code = """\
+        def fetch_customers(conn, filters):
+            query = "SELECT * FROM customers"
+            if filters:
+                clauses = [f"{k} = ?" for k in filters]
+                query += " WHERE " + " AND ".join(clauses)
+            return conn.execute(query, tuple(filters.values())).fetchall()
+
+        ALLOWED = {"status", "city", "signup_year"}
+        clauses = [f"{k}=?" for k in filters if k in ALLOWED]
+        """
+    findings = _scan(code)
+    assert len(findings) == 1
+    assert findings[0].rule_id == "sql-ast.dynamic-variable-query"
+
+
+def test_in_comprehension_guard_with_module_allowlist_stays_clean():
+    code = """\
+        ALLOWED = {"status", "city", "signup_year"}
+
+        def fetch_customers(conn, filters):
+            query = "SELECT * FROM customers"
+            if filters:
+                clauses = [f"{k} = ?" for k in filters if k in ALLOWED]
+                query += " WHERE " + " AND ".join(clauses)
+            return conn.execute(query, tuple(filters.values())).fetchall()
+        """
+    findings, cleared = _analyze(code)
+    assert findings == []
+
+
+def test_param_shadows_module_sanitized_name():
+    # A module `col` is sanitized by a stray guard; the function param `col`
+    # is a different binding and its interpolation must still be flagged.
+    code = """\
+        if col in {"id", "name"}:
+            pass
+
+        def list_rows(conn, col):
+            return conn.execute(f"SELECT * FROM t ORDER BY {col}").fetchall()
+        """
+    findings = _scan(code)
+    assert len(findings) == 1
+    assert findings[0].rule_id == "sql-ast.fstring-query"
+
+
+# -- BUG B: dict.get() with tainted default -----------------------------------
+
+def test_dict_get_user_controlled_default_is_flagged():
+    code = """\
+        SORT_COLS = {"name": "name", "price": "price"}
+
+        def list_products(conn, sort, fallback):
+            col = SORT_COLS.get(sort, fallback)
+            return conn.execute(f"SELECT * FROM products ORDER BY {col}").fetchall()
+        """
+    findings = _scan(code)
+    assert findings
+    assert findings[0].rule_id == "sql-ast.fstring-query"
+
+
+def test_dict_get_constant_default_stays_clean():
+    code = """\
+        SORT_COLS = {"name": "name", "price": "price"}
+
+        def list_products(conn, sort):
+            col = SORT_COLS.get(sort, "name")
+            return conn.execute(f"SELECT * FROM products ORDER BY {col}").fetchall()
+        """
+    assert _scan(code) == []
+
+
+# -- BUG C: IfExp branch values ------------------------------------------------
+
+def test_ifexp_guards_wrong_operand_is_flagged():
+    code = """\
+        def list_products(conn, sort_col, direction):
+            q = f"SELECT * FROM t ORDER BY {sort_col if direction in ('ASC', 'DESC') else sort_col}"
+            return conn.execute(q).fetchall()
+        """
+    findings = _scan(code)
+    assert findings
+    assert findings[0].rule_id == "sql-ast.dynamic-variable-query"
+
+
+def test_ifexp_guarded_operand_with_const_fallback_stays_clean():
+    code = """\
+        def list_products(conn, col):
+            q = f"SELECT * FROM t ORDER BY {col if col in ('id', 'name') else 'id'}"
+            return conn.execute(q).fetchall()
+        """
+    assert _scan(code) == []
+
+
+# -- BUG D: return / assignment query-builder sink ----------------------------
+
+def test_tainted_query_builder_return_is_flagged():
+    code = """\
+        def update_user(user_id, updates):
+            cols = ", ".join(f"{k} = :{k}" for k in updates)
+            return f"UPDATE users SET {cols} WHERE id = :id", {**updates, "id": user_id}
+        """
+    findings = _scan(code)
+    assert len(findings) == 1
+    assert findings[0].rule_id == "sql-ast.tainted-query-builder"
+
+
+def test_parameterized_query_builder_return_stays_clean():
+    code = """\
+        def build_update(user_id, updates):
+            return "UPDATE users SET email = ?, name = ? WHERE id = ?", [
+                updates["email"], updates["name"], user_id]
+        """
+    assert _scan(code) == []
+
+
+def test_query_builder_that_is_also_executed_is_not_double_reported():
+    # The build assignment is skipped because the same variable is executed;
+    # only the execute() call reports it.
+    code = """\
+        def run(conn, name):
+            query = f"SELECT * FROM users WHERE name = '{name}'"
+            return conn.execute(query).fetchall()
+        """
+    findings = _scan(code)
+    assert len(findings) == 1
+    assert findings[0].rule_id == "sql-ast.dynamic-variable-query"
+
+
 # -- raw-sql artifact ---------------------------------------------------------
 
 def test_raw_sql_with_placeholder_has_no_findings():
