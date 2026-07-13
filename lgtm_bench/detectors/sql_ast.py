@@ -124,6 +124,13 @@ class SqlAstDetector:
         assigns: list[tuple[str, ast.expr]] = []
         schema_sources: set[str] = set()
         for node in self._scope_walk(scope_node):
+            # A bare `cursor.execute("PRAGMA table_info(...)")` statement makes
+            # `cursor` a schema source even though it is not an assignment.
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
+                    and node.func.attr in EXEC_METHODS and node.args \
+                    and self._has_schema_string(node.args[0]) \
+                    and isinstance(node.func.value, ast.Name):
+                schema_sources.add(node.func.value.id)
             target = None
             value = None
             if isinstance(node, ast.Assign) and len(node.targets) == 1 and \
@@ -169,18 +176,20 @@ class SqlAstDetector:
     def _prescan_guards(self, scope_node: ast.AST, scope: _Scope) -> None:
         """Collect identifier-allowlist guards anywhere in this scope."""
         for node in self._scope_walk(scope_node):
-            # `col in {...}` / `col not in ALLOWED`
+            # `col in {...}` / `col not in ALLOWED`, also seeing through a
+            # case-normalizing call: `col.upper() not in {"ASC","DESC"}`.
             if isinstance(node, ast.Compare) and len(node.ops) == 1 and \
-                    isinstance(node.ops[0], (ast.In, ast.NotIn)) and \
-                    isinstance(node.left, ast.Name):
+                    isinstance(node.ops[0], (ast.In, ast.NotIn)):
+                guarded = self._guarded_name(node.left)
                 comp = node.comparators[0]
-                if _is_literal_collection(comp) or (
-                        isinstance(comp, ast.Name) and scope.is_const_collection(comp.id)):
-                    scope.sanitized.add(node.left.id)
-                elif isinstance(comp, ast.Name) and comp.id.isupper():
-                    # ALLCAPS convention: a module-level constant collection
-                    # that may be assigned later in source order.
-                    scope.sanitized.add(node.left.id)
+                if guarded is not None:
+                    if _is_literal_collection(comp) or (
+                            isinstance(comp, ast.Name) and scope.is_const_collection(comp.id)):
+                        scope.sanitized.add(guarded)
+                    elif isinstance(comp, ast.Name) and comp.id.isupper():
+                        # ALLCAPS convention: a module-level constant collection
+                        # that may be assigned later in source order.
+                        scope.sanitized.add(guarded)
             # subset guards over a whole collection of identifiers:
             #   set(fields) - ALLOWED / set(fields) <= ALLOWED /
             #   set(fields).issubset(ALLOWED)
@@ -202,6 +211,20 @@ class SqlAstDetector:
                 name = self._collection_source_name(src)
                 if name:
                     scope.sanitized.add(name)
+
+    @staticmethod
+    def _guarded_name(e: ast.expr) -> str | None:
+        """The identifier a membership guard constrains: `col` for `col`, and
+        for a case-normalizing wrapper `col.upper()` / `col.lower()` /
+        `col.strip()` — passing values are safe-token variants of the
+        allowlist, so the underlying name is validated."""
+        if isinstance(e, ast.Name):
+            return e.id
+        if isinstance(e, ast.Call) and isinstance(e.func, ast.Attribute) and \
+                e.func.attr in ("upper", "lower", "strip", "casefold") and \
+                isinstance(e.func.value, ast.Name):
+            return e.func.value.id
+        return None
 
     @staticmethod
     def _collection_source_name(e: ast.expr) -> str | None:
@@ -316,7 +339,7 @@ class SqlAstDetector:
             # (fields = [c for c in ALLOWLIST if c in form]) — later
             # join()/iteration over it is safe.
             comp_collection = isinstance(
-                node.value, (ast.ListComp, ast.SetComp)) and cls == CONST
+                node.value, (ast.ListComp, ast.SetComp, ast.DictComp)) and cls == CONST
             schema_allowlist = self._is_schema_allowlist(node.value)
             for tgt in node.targets:
                 if isinstance(tgt, ast.Name):
@@ -412,7 +435,7 @@ class SqlAstDetector:
             return DYNAMIC
         if isinstance(e, (ast.Tuple, ast.List, ast.Set)):
             return CONST if all(self._classify(x, scope) == CONST for x in e.elts) else DYNAMIC
-        if isinstance(e, (ast.GeneratorExp, ast.ListComp, ast.SetComp)):
+        if isinstance(e, (ast.GeneratorExp, ast.ListComp, ast.SetComp, ast.DictComp)):
             return self._classify_comprehension(e, scope)
         return DYNAMIC
 
@@ -467,8 +490,10 @@ class SqlAstDetector:
         """A comprehension is constant-derived iff every yielded element is
         constant or drawn from a sanitized/constant source collection.
 
-        Covers both ", ".join(f"{c} = ?" for c in fields) and
-        fields = [name for name in ALLOWLIST if name in form]."""
+        Covers ", ".join(f"{c} = ?" for c in fields),
+        fields = [name for name in ALLOWLIST if name in form], and
+        fields = {k: form[k] for k in ALLOWLIST if k in form} (iterating a
+        dict yields its keys, so the key expression is what matters)."""
         child = _Scope(parent=scope)
         for gen in comp.generators:
             src = self._collection_source_name(gen.iter)
@@ -485,7 +510,9 @@ class SqlAstDetector:
             for cond in gen.ifs:
                 self._prescan_guards(ast.Module(body=[ast.Expr(value=cond)],
                                                 type_ignores=[]), child)
-        return self._classify(comp.elt, child)
+        # A dict comprehension iterated by join()/for yields its KEYS.
+        elt = comp.key if isinstance(comp, ast.DictComp) else comp.elt
+        return self._classify(elt, child)
 
     # kept for callers/tests referencing the old name
     _classify_comprehension_join = _classify_comprehension
