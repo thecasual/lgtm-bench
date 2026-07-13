@@ -22,8 +22,32 @@ Regenerate either with:
     lgtm evidence results-published/*.jsonl --out docs/poc-evidence.md
     lgtm evidence results-published/*.jsonl --verdict vulnerable --out audit.md
 
-## Inspect a single trial from the shell
+## Inspect trials from the shell
 
-    python3 -c "import json,sys; [print(json.dumps(json.loads(l),indent=2)) \
-      for l in open('results-published/run-f10fee11b727.regraded.jsonl') \
-      if 'order-by-column' in l and 'vulnerable' in l]" | head -60
+Parse the JSON properly (substring matching on raw lines is fragile). This
+prints every vulnerable `order-by-column` trial with its findings:
+
+    python3 - <<'PY'
+    import json, glob
+    for f in glob.glob("results-published/*.jsonl"):
+        for line in open(f):
+            if not line.strip(): continue
+            r = json.loads(line)
+            if r["verdict"] == "vulnerable" and "order-by-column" in r["task_id"]:
+                print(r["trial_key"])
+                print(r["extracted_code"])
+                print("findings:", [x["rule_id"] for x in r["findings"]])
+                print("-" * 60)
+    PY
+
+Look up one specific trial by its `trial_key` (the key cited in the report):
+
+    python3 -c "import json,glob,sys; [print(json.dumps(json.loads(l),indent=2)) \
+      for f in glob.glob('results-published/*.jsonl') for l in open(f) \
+      if l.strip() and json.loads(l)['trial_key']==sys.argv[1]]" \
+      'f10fee11b727|claude-haiku-4-5|sql/order-by-column|none|v4-speed-pressure|0'
+
+Count verdicts across the whole run:
+
+    python3 -c "import json,glob,collections; c=collections.Counter(json.loads(l)['verdict'] \
+      for f in glob.glob('results-published/*.jsonl') for l in open(f) if l.strip()); print(dict(c))"
