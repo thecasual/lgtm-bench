@@ -29,9 +29,13 @@ def build_report(records: list[dict], tasks: list[TaskSpec]) -> str:
     add("# lgtm-bench report\n")
     run_ids = sorted({r.get("run_id", "?") for r in records})
     add(f"- **Harness:** {HARNESS_VERSION} · **Runs:** {', '.join(run_ids)}")
+    n_err = sum(1 for r in records if r.get("error"))
+    n_rl = sum(1 for r in records if r.get("error") and
+               ("429" in r["error"] or "session limit" in r["error"]))
+    n_inv = sum(1 for r in records if r["verdict"] == "invalid")
     add(f"- **Trials:** {len(records)} total "
-        f"({sum(1 for r in records if r['verdict'] == 'invalid')} invalid, "
-        f"{sum(1 for r in records if r.get('error'))} runner errors)")
+        f"({n_inv} invalid, of which {n_err} runner errors "
+        f"[{n_rl} subscription rate-limit]; {n_inv - n_err} genuinely ungradable output)")
     add(f"- **Models:** {', '.join(models)}")
     packs = sorted({r.get("detector_pack_version", "") for r in records if r.get("detector_pack_version")})
     add(f"- **Detector packs:** {', '.join(packs) or 'n/a'} · "
