@@ -223,11 +223,17 @@ class SqlAstDetector:
                 cls = self._classify(node.value, scope)
                 lines = set(range(node.lineno,
                                   (getattr(node, "end_lineno", None) or node.lineno) + 1))
+                # A comprehension over a sanitized/constant source that itself
+                # classifies constant yields a sanitized collection of
+                # identifiers (fields = [c for c in ALLOWLIST if c in form]),
+                # so later join()/iteration over it is safe.
+                comp_collection = isinstance(
+                    node.value, (ast.ListComp, ast.SetComp)) and cls == CONST
                 for tgt in node.targets:
                     if isinstance(tgt, ast.Name):
                         scope.env[tgt.id] = cls
                         scope.assign_lines.setdefault(tgt.id, set()).update(lines)
-                        if _is_literal_collection(node.value):
+                        if _is_literal_collection(node.value) or comp_collection:
                             scope.const_collections.add(tgt.id)
             elif isinstance(node, ast.AnnAssign) and node.value is not None and \
                     isinstance(node.target, ast.Name):
@@ -310,6 +316,8 @@ class SqlAstDetector:
             return DYNAMIC
         if isinstance(e, (ast.Tuple, ast.List, ast.Set)):
             return CONST if all(self._classify(x, scope) == CONST for x in e.elts) else DYNAMIC
+        if isinstance(e, (ast.GeneratorExp, ast.ListComp, ast.SetComp)):
+            return self._classify_comprehension(e, scope)
         return DYNAMIC
 
     def _classify_call(self, e: ast.Call, scope: _Scope) -> str:
@@ -359,11 +367,12 @@ class SqlAstDetector:
                 return CONST
         return DYNAMIC
 
-    def _classify_comprehension_join(self, comp: ast.GeneratorExp | ast.ListComp,
-                                     scope: _Scope) -> str:
-        """", ".join(f"{c} = ?" for c in fields) — constant iff every
-        interpolated piece is constant or drawn from a sanitized/constant
-        source collection."""
+    def _classify_comprehension(self, comp, scope: _Scope) -> str:
+        """A comprehension is constant-derived iff every yielded element is
+        constant or drawn from a sanitized/constant source collection.
+
+        Covers both ", ".join(f"{c} = ?" for c in fields) and
+        fields = [name for name in ALLOWLIST if name in form]."""
         child = _Scope(parent=scope)
         for gen in comp.generators:
             src = self._collection_source_name(gen.iter)
@@ -381,6 +390,9 @@ class SqlAstDetector:
                 self._prescan_guards(ast.Module(body=[ast.Expr(value=cond)],
                                                 type_ignores=[]), child)
         return self._classify(comp.elt, child)
+
+    # kept for callers/tests referencing the old name
+    _classify_comprehension_join = _classify_comprehension
 
     def _sanitized_value(self, e: ast.expr, scope: _Scope) -> bool:
         """Is this interpolated value safe to embed in SQL text?"""

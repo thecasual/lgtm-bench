@@ -61,6 +61,26 @@ def detect(
 
 
 @app.command()
+def evidence(
+    results: list[Path] = typer.Argument(..., help="one or more results JSONL files"),
+    out: Path = typer.Option(Path("evidence.md")),
+    verdict: Optional[str] = typer.Option(None, help="filter: secure|vulnerable|invalid"),
+    task_filter: Optional[str] = typer.Option(None, help="filter: task-id substring"),
+    model: Optional[str] = typer.Option(None, help="filter: exact model id"),
+):
+    """Render a human-readable per-trial audit transcript (prompt, output,
+    extracted code, scan findings, verdict) — the ground truth behind report."""
+    from .evidence import build_evidence
+    records = load_records(results)
+    if not records:
+        typer.echo("no records found", err=True)
+        raise typer.Exit(1)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(build_evidence(records, verdict, task_filter, model))
+    typer.echo(f"evidence: {out}")
+
+
+@app.command()
 def report(
     results: list[Path] = typer.Argument(..., help="one or more results JSONL files"),
     tasks: Path = typer.Option(Path("tasks")),
