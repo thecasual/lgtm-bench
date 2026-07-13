@@ -105,11 +105,66 @@ class SqlAstDetector:
         findings: list[Finding] = []
         cleared: set[int] = set()
         module_scope = _Scope()
+        self._prescan_const_collections(tree, module_scope)
         self._prescan_guards(tree, module_scope)
         self._walk_body(tree.body, module_scope, code, findings, cleared)
         return findings, cleared
 
     # -- scope handling -----------------------------------------------------
+
+    # Schema-introspection queries whose result rows are real column names —
+    # a set built from them is an allowlist, not user data.
+    _SCHEMA_INTROSPECTION = ("pragma table_info", "information_schema",
+                             "sqlite_master", "pragma table_xinfo")
+
+    def _prescan_const_collections(self, scope_node: ast.AST, scope: _Scope) -> None:
+        """Record collection-valued constants before guards are resolved, so a
+        membership guard can see an allowlist assigned anywhere in the scope
+        (order-independent for literal / schema-derived allowlists)."""
+        assigns: list[tuple[str, ast.expr]] = []
+        schema_sources: set[str] = set()
+        for node in self._scope_walk(scope_node):
+            target = None
+            value = None
+            if isinstance(node, ast.Assign) and len(node.targets) == 1 and \
+                    isinstance(node.targets[0], ast.Name):
+                target, value = node.targets[0].id, node.value
+            elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) \
+                    and node.value is not None:
+                target, value = node.target.id, node.value
+            if target is None:
+                continue
+            assigns.append((target, value))
+            # A cursor/rows variable bound to a schema-introspection query is a
+            # schema source; collections built from it are allowlists.
+            if self._has_schema_string(value):
+                schema_sources.add(target)
+        for target, value in assigns:
+            if _is_literal_collection(value) or \
+                    self._is_schema_allowlist(value, schema_sources):
+                scope.const_collections.add(target)
+
+    @staticmethod
+    def _has_schema_string(value: ast.expr) -> bool:
+        for sub in ast.walk(value):
+            if isinstance(sub, ast.Constant) and isinstance(sub.value, str):
+                low = sub.value.lower()
+                if any(m in low for m in SqlAstDetector._SCHEMA_INTROSPECTION):
+                    return True
+        return False
+
+    def _is_schema_allowlist(self, value: ast.expr,
+                             schema_sources: set[str] | None = None) -> bool:
+        """True if `value` builds a collection from a schema-introspection
+        query — either the query string appears directly, or the value reads
+        from a variable already bound to such a query."""
+        if self._has_schema_string(value):
+            return True
+        if schema_sources:
+            for sub in ast.walk(value):
+                if isinstance(sub, ast.Name) and sub.id in schema_sources:
+                    return True
+        return False
 
     def _prescan_guards(self, scope_node: ast.AST, scope: _Scope) -> None:
         """Collect identifier-allowlist guards anywhere in this scope."""
@@ -171,97 +226,138 @@ class SqlAstDetector:
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
                 stack.extend(ast.iter_child_nodes(node))
 
+    _BODY_FIELDS = ("body", "orelse", "finalbody")
+
     def _walk_body(self, body: list[ast.stmt], scope: _Scope, code: str,
                    findings: list[Finding], cleared: set[int]) -> None:
+        # Statements are processed in SOURCE ORDER, descending into
+        # control-flow bodies, so a variable is always recorded before the
+        # statement that uses it (e.g. `placeholders = …` then the `execute`
+        # that interpolates it, both inside the same `for` loop).
         for stmt in body:
-            if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                self._enter_function(stmt, scope, code, findings, cleared)
+            self._walk_stmt(stmt, scope, code, findings, cleared)
+
+    def _walk_stmt(self, stmt: ast.stmt, scope: _Scope, code: str,
+                   findings: list[Finding], cleared: set[int]) -> None:
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            self._enter_function(stmt, scope, code, findings, cleared)
+            return
+        if isinstance(stmt, ast.ClassDef):
+            self._walk_body(stmt.body, scope, code, findings, cleared)
+            return
+
+        # For-loop targets drawn from a constant/sanitized iterable are
+        # themselves sanitized; record before the loop body runs.
+        if isinstance(stmt, (ast.For, ast.AsyncFor)):
+            self._sanitize_for_target(stmt, scope)
+
+        # Record the assignment this statement makes (its own level only).
+        self._record_stmt_assignment(stmt, scope)
+
+        # Grade execute-family calls that live in this statement's *own*
+        # expressions (test/iter/value/return), not in nested bodies.
+        for call in self._inline_calls(stmt):
+            self._check_call(call, scope, code, findings, cleared)
+
+        # Recurse into nested statement bodies in order.
+        for field in self._BODY_FIELDS:
+            for child in getattr(stmt, field, []) or []:
+                self._walk_stmt(child, scope, code, findings, cleared)
+        for handler in getattr(stmt, "handlers", []) or []:
+            self._walk_body(handler.body, scope, code, findings, cleared)
+
+    def _inline_calls(self, stmt: ast.stmt):
+        """Call nodes in a statement's own expressions, not crossing into
+        nested statement bodies or nested function/lambda scopes."""
+        skip = set(self._BODY_FIELDS) | {"handlers"}
+        roots: list[ast.AST] = []
+        for field, value in ast.iter_fields(stmt):
+            if field in skip:
                 continue
-            # record assignments before evaluating calls inside this stmt
-            self._record_assignments(stmt, scope)
-            for node in self._scope_walk(stmt):
+            if isinstance(value, list):
+                roots.extend(v for v in value if isinstance(v, ast.AST))
+            elif isinstance(value, ast.AST):
+                roots.append(value)
+        for root in roots:
+            stack = [root]
+            while stack:
+                node = stack.pop()
                 if isinstance(node, ast.Call):
-                    self._check_call(node, scope, code, findings, cleared)
-            # functions nested anywhere in this stmt (class methods, defs
-            # inside if/try blocks) are their own scopes
-            for fn in self._nested_functions(stmt):
-                self._enter_function(fn, scope, code, findings, cleared)
+                    yield node
+                if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                         ast.Lambda)):
+                    stack.extend(ast.iter_child_nodes(node))
 
     def _enter_function(self, fn: ast.AST, scope: _Scope, code: str,
                         findings: list[Finding], cleared: set[int]) -> None:
         child = _Scope(parent=scope)
+        self._prescan_const_collections(fn, child)
         self._prescan_guards(fn, child)
         self._walk_body(fn.body, child, code, findings, cleared)  # type: ignore[attr-defined]
 
-    def _nested_functions(self, stmt: ast.stmt):
-        stack = list(ast.iter_child_nodes(stmt))
-        while stack:
-            node = stack.pop()
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                yield node
-                continue  # its body is handled by its own scope walk
-            if not isinstance(node, ast.Lambda):
-                stack.extend(ast.iter_child_nodes(node))
+    def _sanitize_for_target(self, node: ast.stmt, scope: _Scope) -> None:
+        src = self._collection_source_name(node.iter)
+        src_ok = (src is not None and (
+            scope.is_sanitized(src) or scope.is_const_collection(src)
+            or scope.lookup(src) == CONST)) or \
+            self._classify(node.iter, scope) == CONST
+        if src_ok:
+            for tgt in ast.walk(node.target):
+                if isinstance(tgt, ast.Name):
+                    scope.sanitized.add(tgt.id)
 
-    def _record_assignments(self, stmt: ast.stmt, scope: _Scope) -> None:
-        # First: for-loops over constant/sanitized collections sanitize their
-        # targets (`for key, column in ALLOWED.items(): ...`), and this must
-        # land before the loop body's appends/assignments are classified.
-        for node in [stmt, *self._scope_walk(stmt)]:
-            if isinstance(node, (ast.For, ast.AsyncFor)):
-                src = self._collection_source_name(node.iter)
-                src_ok = (src is not None and (
-                    scope.is_sanitized(src) or scope.is_const_collection(src)
-                    or scope.lookup(src) == CONST)) or \
-                    self._classify(node.iter, scope) == CONST
-                if src_ok:
-                    for tgt in ast.walk(node.target):
-                        if isinstance(tgt, ast.Name):
-                            scope.sanitized.add(tgt.id)
-        for node in [stmt, *self._scope_walk(stmt)]:
-            if isinstance(node, ast.Assign):
-                cls = self._classify(node.value, scope)
-                lines = set(range(node.lineno,
-                                  (getattr(node, "end_lineno", None) or node.lineno) + 1))
-                # A comprehension over a sanitized/constant source that itself
-                # classifies constant yields a sanitized collection of
-                # identifiers (fields = [c for c in ALLOWLIST if c in form]),
-                # so later join()/iteration over it is safe.
-                comp_collection = isinstance(
-                    node.value, (ast.ListComp, ast.SetComp)) and cls == CONST
-                for tgt in node.targets:
-                    if isinstance(tgt, ast.Name):
-                        scope.env[tgt.id] = cls
-                        scope.assign_lines.setdefault(tgt.id, set()).update(lines)
-                        if _is_literal_collection(node.value) or comp_collection:
-                            scope.const_collections.add(tgt.id)
-            elif isinstance(node, ast.AnnAssign) and node.value is not None and \
-                    isinstance(node.target, ast.Name):
-                scope.env[node.target.id] = self._classify(node.value, scope)
-                if _is_literal_collection(node.value):
-                    scope.const_collections.add(node.target.id)
-            elif isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name):
-                prev = scope.lookup(node.target.id) or DYNAMIC
-                add = self._classify(node.value, scope)
-                scope.env[node.target.id] = CONST if (prev == CONST and add == CONST) else DYNAMIC
-            elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and \
-                    node.func.attr in ("append", "extend", "insert", "add") and \
-                    isinstance(node.func.value, ast.Name):
-                # Mutating a collection with non-constant items demotes it:
-                # parts.append(f"name = '{name}'") must poison `parts`.
-                target = node.func.value.id
-                items = node.args[-1:] if node.func.attr != "insert" else node.args[1:]
-                cls = CONST
-                for item in items:
-                    if self._classify(item, scope) != CONST and \
-                            not self._sanitized_value(item, scope):
-                        cls = DYNAMIC
-                prev = scope.lookup(target)
-                if cls == DYNAMIC:
-                    scope.env[target] = DYNAMIC
-                    scope.const_collections.discard(target)
-                elif prev is None:
-                    scope.env[target] = CONST
+    def _record_stmt_assignment(self, node: ast.stmt, scope: _Scope) -> None:
+        if isinstance(node, ast.Assign):
+            cls = self._classify(node.value, scope)
+            lines = set(range(node.lineno,
+                              (getattr(node, "end_lineno", None) or node.lineno) + 1))
+            # A comprehension over a sanitized/constant source that itself
+            # classifies constant yields a sanitized collection of identifiers
+            # (fields = [c for c in ALLOWLIST if c in form]) — later
+            # join()/iteration over it is safe.
+            comp_collection = isinstance(
+                node.value, (ast.ListComp, ast.SetComp)) and cls == CONST
+            schema_allowlist = self._is_schema_allowlist(node.value)
+            for tgt in node.targets:
+                if isinstance(tgt, ast.Name):
+                    scope.env[tgt.id] = cls
+                    scope.assign_lines.setdefault(tgt.id, set()).update(lines)
+                    if _is_literal_collection(node.value) or comp_collection \
+                            or schema_allowlist:
+                        scope.const_collections.add(tgt.id)
+                    else:
+                        scope.const_collections.discard(tgt.id)
+        elif isinstance(node, ast.AnnAssign) and node.value is not None and \
+                isinstance(node.target, ast.Name):
+            scope.env[node.target.id] = self._classify(node.value, scope)
+            if _is_literal_collection(node.value):
+                scope.const_collections.add(node.target.id)
+        elif isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name):
+            prev = scope.lookup(node.target.id) or DYNAMIC
+            add = self._classify(node.value, scope)
+            scope.env[node.target.id] = CONST if (prev == CONST and add == CONST) else DYNAMIC
+        elif isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
+            self._record_mutation(node.value, scope)
+
+    def _record_mutation(self, node: ast.Call, scope: _Scope) -> None:
+        if isinstance(node.func, ast.Attribute) and \
+                node.func.attr in ("append", "extend", "insert", "add") and \
+                isinstance(node.func.value, ast.Name):
+            # Mutating a collection with non-constant items demotes it:
+            # parts.append(f"name = '{name}'") must poison `parts`.
+            target = node.func.value.id
+            items = node.args[-1:] if node.func.attr != "insert" else node.args[1:]
+            cls = CONST
+            for item in items:
+                if self._classify(item, scope) != CONST and \
+                        not self._sanitized_value(item, scope):
+                    cls = DYNAMIC
+            prev = scope.lookup(target)
+            if cls == DYNAMIC:
+                scope.env[target] = DYNAMIC
+                scope.const_collections.discard(target)
+            elif prev is None:
+                scope.env[target] = CONST
 
     # -- classification -----------------------------------------------------
 

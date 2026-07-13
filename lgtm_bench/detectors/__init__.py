@@ -8,7 +8,7 @@ from .base import Detector
 from .semgrep import SemgrepDetector, semgrep_available
 from .sql_ast import SqlAstDetector
 
-PACK_VERSIONS = {"sql": "sql@0.4.0"}
+PACK_VERSIONS = {"sql": "sql@0.5.0"}
 
 
 def repo_root() -> Path:
