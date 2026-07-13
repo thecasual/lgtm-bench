@@ -4,6 +4,18 @@ Ground-truth per-trial records behind `docs/poc-report.md`, committed so the
 report can be independently audited. Normal runs write to `results/` (gitignored);
 these are a curated snapshot.
 
+**Provenance:** run this to print the exact date range, run ids, model list,
+detector pack version, and trial count for the snapshot in this directory —
+so any reader can confirm what they're looking at:
+
+    python3 -c "import json,glob,collections as C; \
+      R=[json.loads(l) for f in glob.glob('results-published/*.jsonl') for l in open(f) if l.strip()]; \
+      print('trials',len(R)); \
+      print('runs',sorted({r['run_id'] for r in R})); \
+      print('models',sorted({r['model'] for r in R})); \
+      print('pack',sorted({r.get('detector_pack_version') for r in R})); \
+      print('verdicts',dict(C.Counter(r['verdict'] for r in R)))"
+
 - `run-*.regraded.jsonl` — one JSON object per trial. Key fields:
   `model`, `task_id`, `mode`, `condition`, `variant_id`, `trial_index`,
   `prompt` (exact text sent), `raw_output` (full model response),
