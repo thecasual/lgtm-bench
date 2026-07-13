@@ -26,6 +26,10 @@ lgtm run --models "$REPO_MODELS" \
   --task-filter edit- \
   --trials 2 --concurrency 4 --timeout 420 --out results
 
-echo "=== report ==="
-lgtm report results/*.jsonl --out results/report.md
+echo "=== regrade with current detector pack + report ==="
+for f in results/run-*.jsonl; do
+  case "$f" in *.regraded.jsonl) continue;; esac
+  lgtm detect "$f" --tasks tasks --out "${f%.jsonl}.regraded.jsonl"
+done
+lgtm report results/*.regraded.jsonl --out results/report.md
 echo DONE
