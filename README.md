@@ -27,7 +27,17 @@ The first vertical is **SQL query generation / SQL injection** (Python + sqlite/
 Detection is fully static (Semgrep + AST/sqlglot) — deterministic and free to run. Model
 calls ride an Anthropic subscription via Claude Code headless mode.
 
-**Read the full design:** [docs/TECH_SPEC.md](docs/TECH_SPEC.md)
+The models in the published run: **`claude-fable-5`** (a fast Claude model — the smaller
+sibling in this generation, used here as the frugal default), **`claude-opus-4-8`** and
+**`claude-opus-4-1`** (frontier), **`claude-sonnet-5`** and **`claude-sonnet-4-5`**
+(mid-tier, current and prior generation), **`claude-haiku-4-5`** (small/fast).
+
+**Read next:**
+- [docs/poc-report.md](docs/poc-report.md) — the benchmark report (findings, tables, limitations)
+- [docs/METHODOLOGY.md](docs/METHODOLOGY.md) — how verdicts are decided and how the grader was validated
+- [docs/REPRODUCE.md](docs/REPRODUCE.md) — reproduce the report from scratch, plus a glossary
+- [docs/TECH_SPEC.md](docs/TECH_SPEC.md) — the full design
+- [docs/poc-evidence.md](docs/poc-evidence.md) — every trial: prompt → output → findings → verdict
 
 ## Quick start
 
