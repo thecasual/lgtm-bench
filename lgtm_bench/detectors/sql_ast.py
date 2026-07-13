@@ -386,6 +386,10 @@ class SqlAstDetector:
         """Is this interpolated value safe to embed in SQL text?"""
         if isinstance(e, ast.Constant):
             return True
+        # Anything the classifier proves constant-derived is safe to embed,
+        # e.g. ", ".join("?" * len(ids)) — placeholder text, not user data.
+        if self._classify(e, scope) == CONST:
+            return True
         if isinstance(e, ast.Call) and isinstance(e.func, ast.Name) and \
                 e.func.id in _SAFE_CASTS:
             return True
