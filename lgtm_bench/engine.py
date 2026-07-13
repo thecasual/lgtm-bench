@@ -195,10 +195,15 @@ def regrade(results_path: Path, tasks_root: Path, out_path: Optional[Path] = Non
     tasks = {t.id: t for t in load_tasks(tasks_root)}
     src = ResultStore(results_path)
     dest_path = out_path or results_path.with_suffix(".regraded.jsonl")
+    # Read everything BEFORE touching dest: with dest == source, unlinking
+    # first would destroy the run's raw outputs irrecoverably.
+    records = src.load()
+    if not records and results_path.resolve() == dest_path.resolve():
+        raise ValueError(f"refusing in-place regrade of unreadable/empty {results_path}")
     if dest_path.exists():
         dest_path.unlink()
     dest = ResultStore(dest_path)
-    for rec in src.load():
+    for rec in records:
         task = tasks.get(rec["task_id"])
         record = TrialRecord.model_validate(rec)
         if task is None or record.error is not None:

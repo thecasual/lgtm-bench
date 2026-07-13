@@ -107,3 +107,28 @@ def test_append_after_torn_tail_heals_line(tmp_path):
     keys = store.existing_keys()
     assert keys == {"k1", "k2"}
     assert len(store.load()) == 2
+
+
+def test_regrade_in_place_preserves_records(tmp_path):
+    """regrade(out_path == results_path) must not destroy the source."""
+    import json
+    from lgtm_bench.engine import regrade
+    from lgtm_bench.store import ResultStore
+    from lgtm_bench.schema import TrialRecord, Verdict
+
+    tasks_dir = tmp_path / "tasks"
+    tasks_dir.mkdir()
+    (tasks_dir / "t.yaml").write_text(
+        "id: sql/t\ncategory: sql\ntitle: t\nconditions: [none]\n"
+        "variants:\n  - id: v1\n    prompt: p\n")
+    p = tmp_path / "r.jsonl"
+    store = ResultStore(p)
+    rec = TrialRecord(
+        trial_key="k1", run_id="r", model="m", task_id="sql/t", mode="generate",
+        condition="none", variant_id="v1", trial_index=0, prompt="p",
+        raw_output="```python\nx = 1\n```", extracted_code="x = 1",
+        verdict=Verdict.SECURE)
+    store.append(rec)
+    out = regrade(p, tasks_dir, out_path=p)
+    lines = [json.loads(l) for l in open(out)]
+    assert len(lines) == 1 and lines[0]["trial_key"] == "k1"

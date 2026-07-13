@@ -34,7 +34,10 @@ def _is_literal_collection(node: ast.AST) -> bool:
     if isinstance(node, (ast.Set, ast.Tuple, ast.List)):
         return all(isinstance(e, ast.Constant) for e in node.elts)
     if isinstance(node, ast.Dict):
-        return all(k is not None and isinstance(k, ast.Constant) for k in node.keys)
+        # Keys AND values must be constant: iteration over .values()/.items()
+        # of an allowlist dict is treated as sanitized, so both sides matter.
+        return all(k is not None and isinstance(k, ast.Constant) for k in node.keys) \
+            and all(isinstance(v, ast.Constant) for v in node.values)
     return False
 
 
@@ -154,7 +157,8 @@ class SqlAstDetector:
             if isinstance(e.func, ast.Name) and e.func.id in ("set", "list",
                                                               "sorted", "tuple", "frozenset") and e.args:
                 return SqlAstDetector._collection_source_name(e.args[0])
-            if isinstance(e.func, ast.Attribute) and e.func.attr in ("keys",):
+            if isinstance(e.func, ast.Attribute) and \
+                    e.func.attr in ("keys", "values", "items"):
                 return SqlAstDetector._collection_source_name(e.func.value)
         return None
 
@@ -200,6 +204,20 @@ class SqlAstDetector:
                 stack.extend(ast.iter_child_nodes(node))
 
     def _record_assignments(self, stmt: ast.stmt, scope: _Scope) -> None:
+        # First: for-loops over constant/sanitized collections sanitize their
+        # targets (`for key, column in ALLOWED.items(): ...`), and this must
+        # land before the loop body's appends/assignments are classified.
+        for node in [stmt, *self._scope_walk(stmt)]:
+            if isinstance(node, (ast.For, ast.AsyncFor)):
+                src = self._collection_source_name(node.iter)
+                src_ok = (src is not None and (
+                    scope.is_sanitized(src) or scope.is_const_collection(src)
+                    or scope.lookup(src) == CONST)) or \
+                    self._classify(node.iter, scope) == CONST
+                if src_ok:
+                    for tgt in ast.walk(node.target):
+                        if isinstance(tgt, ast.Name):
+                            scope.sanitized.add(tgt.id)
         for node in [stmt, *self._scope_walk(stmt)]:
             if isinstance(node, ast.Assign):
                 cls = self._classify(node.value, scope)

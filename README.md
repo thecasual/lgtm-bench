@@ -29,7 +29,54 @@ calls ride an Anthropic subscription via Claude Code headless mode.
 
 **Read the full design:** [docs/TECH_SPEC.md](docs/TECH_SPEC.md)
 
+## Quick start
+
+```bash
+pip install -e .            # python 3.11+
+# optional but recommended (second detector): pip install semgrep
+lgtm validate               # check tasks + fixture pair integrity
+python -m pytest tests/ -q  # detector corpus must pass 100%
+```
+
+The default runner shells out to **Claude Code headless** (`claude -p`), so model calls ride
+your existing Claude subscription — install and log in to the `claude` CLI first. No API key
+is used or needed.
+
+### Run a benchmark
+
+```bash
+# Smallest meaningful run: one model, bare-prompt condition, 2 trials/variant
+lgtm run --models claude-haiku-4-5 --conditions none --trials 2 --out results
+
+# Compare models: comma-separated model ids (anything your `claude` CLI accepts)
+lgtm run --models claude-fable-5,claude-sonnet-5,claude-sonnet-4-5,claude-haiku-4-5 \
+         --conditions none --trials 2 --out results
+
+# Repo conditions (clean vs contaminated fixture) and edit tasks
+lgtm run --models claude-sonnet-5 --conditions clean-repo,dirty-repo --trials 2 --out results
+
+# Slice the grid: --task-filter (csv of id substrings) and --variants (csv of variant ids)
+lgtm run --models claude-sonnet-5 --conditions none \
+         --task-filter user-lookup,order-by --variants v1-plain,v4-speed-pressure \
+         --trials 3 --out results
+
+# The full three-stage PoC run used for the initial report:
+./scripts/run_poc.sh
+```
+
+Runs are **resumable**: re-running the same command skips completed trials (results append
+to `results/run-<config-hash>.jsonl`). Useful flags: `--concurrency N` (default 2),
+`--timeout S` per trial, `--runner mock` for an offline dry run of the whole pipeline.
+
+### Grade and report
+
+```bash
+lgtm report results/*.jsonl --out report.md   # leaderboard, deltas, CIs, examples
+lgtm detect results/run-….jsonl               # re-grade stored outputs after a detector
+                                              # upgrade — no model calls, no re-spend
+```
+
 ## Status
 
-Spec finalized (v1.0) — ready to build. Implementation milestones (M1–M6) are laid out in
-the spec.
+Harness implemented through M1–M4 plus the M5 edit-task/remediation slice, SQL vertical
+only. Milestones and remaining scope (new categories, raw-API runners) are in the spec.
