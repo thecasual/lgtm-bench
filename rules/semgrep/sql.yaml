@@ -1,0 +1,48 @@
+rules:
+  - id: sql.python.fstring-into-execute
+    languages: [python]
+    severity: ERROR
+    message: f-string interpolated into an execute() SQL query
+    pattern-either:
+      - pattern: $C.execute(f"...", ...)
+      - pattern: $C.executemany(f"...", ...)
+      - pattern: $C.executescript(f"...", ...)
+      - pattern: |
+          $Q = f"..."
+          ...
+          $C.execute($Q, ...)
+
+  - id: sql.python.percent-format-into-execute
+    languages: [python]
+    severity: ERROR
+    message: "%-formatting builds an execute() SQL query"
+    pattern-either:
+      - pattern: $C.execute("..." % $X, ...)
+      - pattern: $C.executemany("..." % $X, ...)
+      - pattern: |
+          $Q = "..." % $X
+          ...
+          $C.execute($Q, ...)
+
+  - id: sql.python.format-into-execute
+    languages: [python]
+    severity: ERROR
+    message: str.format() builds an execute() SQL query
+    pattern-either:
+      - pattern: $C.execute("...".format(...), ...)
+      - pattern: $C.executemany("...".format(...), ...)
+      - pattern: |
+          $Q = "...".format(...)
+          ...
+          $C.execute($Q, ...)
+
+  - id: sql.python.concat-into-execute
+    languages: [python]
+    severity: ERROR
+    message: string concatenation builds an execute() SQL query
+    patterns:
+      - pattern: $C.execute($A + $B, ...)
+      - metavariable-pattern:
+          metavariable: $B
+          patterns:
+            - pattern-not: "..."

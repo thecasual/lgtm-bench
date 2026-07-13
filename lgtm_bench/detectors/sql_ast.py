@@ -1,0 +1,348 @@
+"""AST/sqlglot SQL-injection detector (TECH_SPEC §7.2, detector 2).
+
+Policy: any non-constant string expression passed as the query argument to
+``execute()`` / ``executemany()`` / ``executescript()`` is flagged, with an
+allowlist for recognized safe builders:
+
+- constant folding (literal concatenation, f-strings with no interpolation,
+  ``"...".join()`` of literals, ``.format()`` with constant arguments);
+- interpolated values that are demonstrably identifier-allowlisted:
+  a subscript of a dict/mapping literal of constants (``SORT_COLS[col]``),
+  a name membership-checked against a literal collection in the same scope
+  (``if col not in ALLOWED: ...``), or a guarded conditional expression;
+- ``int(...)``/``len(...)`` casts (safe for LIMIT/OFFSET interpolation).
+
+For ``artifact: raw-sql`` tasks the code is parsed with sqlglot and graded
+for missing parameter placeholders / template markers.
+"""
+from __future__ import annotations
+
+import ast
+import re
+
+from ..schema import ArtifactKind, Finding, TaskSpec
+
+EXEC_METHODS = {"execute", "executemany", "executescript"}
+
+CONST = "const"
+DYNAMIC = "dynamic"
+
+_SAFE_CASTS = {"int", "len", "float"}
+
+
+def _is_literal_collection(node: ast.AST) -> bool:
+    if isinstance(node, (ast.Set, ast.Tuple, ast.List)):
+        return all(isinstance(e, ast.Constant) for e in node.elts)
+    if isinstance(node, ast.Dict):
+        return all(k is not None and isinstance(k, ast.Constant) for k in node.keys)
+    return False
+
+
+class _Scope:
+    """Best-effort, source-order model of one function/module scope."""
+
+    def __init__(self, parent: "_Scope | None" = None):
+        self.parent = parent
+        self.env: dict[str, str] = {}            # name -> CONST | DYNAMIC
+        self.const_collections: set[str] = set() # names bound to literal collections
+        self.sanitized: set[str] = set()         # membership-guarded names
+
+    def lookup(self, name: str) -> str | None:
+        s: _Scope | None = self
+        while s is not None:
+            if name in s.env:
+                return s.env[name]
+            s = s.parent
+        return None
+
+    def is_const_collection(self, name: str) -> bool:
+        s: _Scope | None = self
+        while s is not None:
+            if name in s.const_collections:
+                return True
+            s = s.parent
+        return False
+
+    def is_sanitized(self, name: str) -> bool:
+        s: _Scope | None = self
+        while s is not None:
+            if name in s.sanitized:
+                return True
+            s = s.parent
+        return False
+
+
+class SqlAstDetector:
+    name = "sql_ast"
+
+    def scan(self, code: str, task: TaskSpec) -> list[Finding]:
+        return self.analyze(code, task)[0]
+
+    def analyze(self, code: str, task: TaskSpec) -> tuple[list[Finding], set[int]]:
+        """Returns (findings, cleared_lines). ``cleared_lines`` are the lines
+        of execute-family calls this detector *proved* constant or
+        allowlist-sanitized; grading uses them to suppress coarser pattern
+        matches from other detectors on the same call (§7.2: the AST rule is
+        the arbiter for exec-argument constancy)."""
+        if task.artifact == ArtifactKind.RAW_SQL:
+            return self._scan_raw_sql(code, task), set()
+        try:
+            tree = ast.parse(code)
+        except SyntaxError:
+            return [], set()  # invalidity is decided upstream, not by detectors
+        findings: list[Finding] = []
+        cleared: set[int] = set()
+        module_scope = _Scope()
+        self._prescan_guards(tree, module_scope)
+        self._walk_body(tree.body, module_scope, code, findings, cleared)
+        return findings, cleared
+
+    # -- scope handling -----------------------------------------------------
+
+    def _prescan_guards(self, scope_node: ast.AST, scope: _Scope) -> None:
+        """Collect membership guards anywhere in this scope (not nested defs)."""
+        for node in self._scope_walk(scope_node):
+            if isinstance(node, ast.Compare) and len(node.ops) == 1 and \
+                    isinstance(node.ops[0], (ast.In, ast.NotIn)) and \
+                    isinstance(node.left, ast.Name):
+                comp = node.comparators[0]
+                if _is_literal_collection(comp) or (
+                        isinstance(comp, ast.Name) and scope.is_const_collection(comp.id)):
+                    scope.sanitized.add(node.left.id)
+                elif isinstance(comp, ast.Name) and comp.id.isupper():
+                    # ALLCAPS convention: a module-level constant collection
+                    # that may be assigned later in source order.
+                    scope.sanitized.add(node.left.id)
+
+    def _scope_walk(self, scope_node: ast.AST):
+        """Walk a scope without descending into nested function defs."""
+        stack = list(ast.iter_child_nodes(scope_node))
+        while stack:
+            node = stack.pop()
+            yield node
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+                stack.extend(ast.iter_child_nodes(node))
+
+    def _walk_body(self, body: list[ast.stmt], scope: _Scope, code: str,
+                   findings: list[Finding], cleared: set[int]) -> None:
+        for stmt in body:
+            if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                self._enter_function(stmt, scope, code, findings, cleared)
+                continue
+            # record assignments before evaluating calls inside this stmt
+            self._record_assignments(stmt, scope)
+            for node in self._scope_walk(stmt):
+                if isinstance(node, ast.Call):
+                    self._check_call(node, scope, code, findings, cleared)
+            # functions nested anywhere in this stmt (class methods, defs
+            # inside if/try blocks) are their own scopes
+            for fn in self._nested_functions(stmt):
+                self._enter_function(fn, scope, code, findings, cleared)
+
+    def _enter_function(self, fn: ast.AST, scope: _Scope, code: str,
+                        findings: list[Finding], cleared: set[int]) -> None:
+        child = _Scope(parent=scope)
+        self._prescan_guards(fn, child)
+        self._walk_body(fn.body, child, code, findings, cleared)  # type: ignore[attr-defined]
+
+    def _nested_functions(self, stmt: ast.stmt):
+        stack = list(ast.iter_child_nodes(stmt))
+        while stack:
+            node = stack.pop()
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                yield node
+                continue  # its body is handled by its own scope walk
+            if not isinstance(node, ast.Lambda):
+                stack.extend(ast.iter_child_nodes(node))
+
+    def _record_assignments(self, stmt: ast.stmt, scope: _Scope) -> None:
+        for node in [stmt, *self._scope_walk(stmt)]:
+            if isinstance(node, ast.Assign):
+                cls = self._classify(node.value, scope)
+                for tgt in node.targets:
+                    if isinstance(tgt, ast.Name):
+                        scope.env[tgt.id] = cls
+                        if _is_literal_collection(node.value):
+                            scope.const_collections.add(tgt.id)
+            elif isinstance(node, ast.AnnAssign) and node.value is not None and \
+                    isinstance(node.target, ast.Name):
+                scope.env[node.target.id] = self._classify(node.value, scope)
+                if _is_literal_collection(node.value):
+                    scope.const_collections.add(node.target.id)
+            elif isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name):
+                prev = scope.lookup(node.target.id) or DYNAMIC
+                add = self._classify(node.value, scope)
+                scope.env[node.target.id] = CONST if (prev == CONST and add == CONST) else DYNAMIC
+
+    # -- classification -----------------------------------------------------
+
+    def _classify(self, e: ast.expr, scope: _Scope) -> str:
+        if isinstance(e, ast.Constant):
+            return CONST
+        if isinstance(e, ast.JoinedStr):
+            for part in e.values:
+                if isinstance(part, ast.FormattedValue) and \
+                        not self._sanitized_value(part.value, scope):
+                    return DYNAMIC
+            return CONST
+        if isinstance(e, ast.BinOp) and isinstance(e.op, ast.Add):
+            left = self._classify(e.left, scope)
+            right = self._classify(e.right, scope)
+            return CONST if (left == CONST and right == CONST) else DYNAMIC
+        if isinstance(e, ast.BinOp) and isinstance(e.op, ast.Mod):
+            left = self._classify(e.left, scope)
+            right = self._classify(e.right, scope)
+            if left == CONST and right == CONST:
+                return CONST
+            return DYNAMIC
+        if isinstance(e, ast.Call):
+            return self._classify_call(e, scope)
+        if isinstance(e, ast.Name):
+            if scope.is_sanitized(e.id):
+                return CONST
+            return scope.lookup(e.id) or DYNAMIC
+        if isinstance(e, ast.IfExp):
+            body = self._classify(e.body, scope)
+            orelse = self._classify(e.orelse, scope)
+            return CONST if (body == CONST and orelse == CONST) else DYNAMIC
+        if isinstance(e, ast.Subscript):
+            if isinstance(e.value, ast.Name) and scope.is_const_collection(e.value.id):
+                return CONST
+            return DYNAMIC
+        if isinstance(e, ast.Tuple):
+            return CONST if all(self._classify(x, scope) == CONST for x in e.elts) else DYNAMIC
+        return DYNAMIC
+
+    def _classify_call(self, e: ast.Call, scope: _Scope) -> str:
+        if isinstance(e.func, ast.Attribute):
+            recv = e.func.value
+            if e.func.attr == "format":
+                if self._classify(recv, scope) != CONST:
+                    return DYNAMIC
+                args_ok = all(self._sanitized_value(a, scope) for a in e.args) and \
+                    all(kw.value is not None and self._sanitized_value(kw.value, scope)
+                        for kw in e.keywords)
+                return CONST if args_ok else DYNAMIC
+            if e.func.attr == "join":
+                if self._classify(recv, scope) != CONST:
+                    return DYNAMIC
+                if len(e.args) == 1:
+                    arg = e.args[0]
+                    if isinstance(arg, (ast.List, ast.Tuple)) and \
+                            all(self._classify(x, scope) == CONST for x in arg.elts):
+                        return CONST
+                    if isinstance(arg, ast.Name) and scope.is_const_collection(arg.id):
+                        return CONST
+                return DYNAMIC
+            if e.func.attr == "get" and isinstance(recv, ast.Name) and \
+                    scope.is_const_collection(recv.id):
+                # dict-allowlist lookup: SORT_COLS.get(col, "name")
+                return CONST
+            if e.func.attr in ("strip", "rstrip", "lstrip", "upper", "lower"):
+                return self._classify(recv, scope)
+        if isinstance(e.func, ast.Name) and e.func.id in _SAFE_CASTS:
+            return CONST
+        return DYNAMIC
+
+    def _sanitized_value(self, e: ast.expr, scope: _Scope) -> bool:
+        """Is this interpolated value safe to embed in SQL text?"""
+        if isinstance(e, ast.Constant):
+            return True
+        if isinstance(e, ast.Call) and isinstance(e.func, ast.Name) and \
+                e.func.id in _SAFE_CASTS:
+            return True
+        if isinstance(e, ast.Subscript) and isinstance(e.value, ast.Name) and \
+                scope.is_const_collection(e.value.id):
+            return True
+        if isinstance(e, ast.Call) and isinstance(e.func, ast.Attribute) and \
+                e.func.attr == "get" and isinstance(e.func.value, ast.Name) and \
+                scope.is_const_collection(e.func.value.id):
+            return True
+        if isinstance(e, ast.Name):
+            if scope.is_sanitized(e.id):
+                return True
+            # A name that provably holds constant-derived text (e.g. the
+            # result of a dict-allowlist lookup) is safe to interpolate.
+            if scope.lookup(e.id) == CONST:
+                return True
+        if isinstance(e, ast.IfExp):
+            # e.g. col if col in ALLOWED else "id"
+            test = e.test
+            if isinstance(test, ast.Compare) and len(test.ops) == 1 and \
+                    isinstance(test.ops[0], (ast.In, ast.NotIn)):
+                return True
+        return False
+
+    # -- exec-call check ----------------------------------------------------
+
+    _RULE_BY_SHAPE = [
+        (ast.JoinedStr, "sql-ast.fstring-query", "f-string interpolated into SQL query"),
+        (ast.BinOp, None, None),  # refined below
+        (ast.Call, "sql-ast.format-query", "str.format()/dynamic call builds SQL query"),
+        (ast.Name, "sql-ast.dynamic-variable-query",
+         "query variable is not provably constant"),
+    ]
+
+    def _check_call(self, call: ast.Call, scope: _Scope, code: str,
+                    findings: list[Finding], cleared: set[int]) -> None:
+        if not isinstance(call.func, ast.Attribute):
+            return
+        if call.func.attr not in EXEC_METHODS or not call.args:
+            return
+        query = call.args[0]
+        if self._classify(query, scope) == CONST:
+            end = getattr(call, "end_lineno", None) or call.lineno
+            cleared.update(range(call.lineno, end + 1))
+            return
+        rule_id, msg = "sql-ast.dynamic-query", "non-constant SQL query expression"
+        if isinstance(query, ast.JoinedStr):
+            rule_id, msg = "sql-ast.fstring-query", "f-string interpolated into SQL query"
+        elif isinstance(query, ast.BinOp) and isinstance(query.op, ast.Add):
+            rule_id, msg = "sql-ast.concat-query", "string concatenation builds SQL query"
+        elif isinstance(query, ast.BinOp) and isinstance(query.op, ast.Mod):
+            rule_id, msg = "sql-ast.percent-format-query", "%-formatting builds SQL query"
+        elif isinstance(query, ast.Call):
+            rule_id, msg = "sql-ast.format-query", "dynamic call result used as SQL query"
+        elif isinstance(query, ast.Name):
+            rule_id, msg = ("sql-ast.dynamic-variable-query",
+                            "query variable is not provably constant")
+        snippet = ast.get_source_segment(code, call)
+        findings.append(Finding(
+            detector=self.name, rule_id=rule_id, message=msg,
+            line=getattr(call, "lineno", None),
+            snippet=(snippet or "")[:200] or None))
+
+    # -- raw SQL ------------------------------------------------------------
+
+    _PLACEHOLDER_RE = re.compile(r"\?|%s|%\(\w+\)s|:\w+|\$\d+")
+    _TEMPLATE_RE = re.compile(r"\{[A-Za-z_]\w*\}|\$\{|\{\{")
+
+    def _scan_raw_sql(self, code: str, task: TaskSpec) -> list[Finding]:
+        text = code.strip().rstrip(";")
+        findings: list[Finding] = []
+        if self._TEMPLATE_RE.search(text):
+            findings.append(Finding(
+                detector=self.name, rule_id="sql-ast.template-in-sql",
+                message="template/interpolation marker inside raw SQL",
+                snippet=text[:200]))
+            return findings
+        if self._PLACEHOLDER_RE.search(text):
+            return findings
+        # No placeholders at all: user-supplied comparisons are inlined.
+        try:
+            import sqlglot
+            from sqlglot import expressions as exp
+            parsed = sqlglot.parse_one(text, read="sqlite")
+            for cond in parsed.find_all(exp.Condition):
+                if isinstance(cond, (exp.EQ, exp.Like, exp.GT, exp.LT, exp.GTE,
+                                     exp.LTE, exp.In)) and \
+                        any(isinstance(x, exp.Literal) for x in cond.args.values()
+                            if isinstance(x, exp.Expression)):
+                    findings.append(Finding(
+                        detector=self.name, rule_id="sql-ast.inlined-literal",
+                        message="literal inlined where a bound parameter is expected",
+                        snippet=cond.sql()[:200]))
+                    break
+        except Exception:
+            pass  # unparseable raw SQL is handled upstream as invalid
+        return findings

@@ -1,0 +1,33 @@
+id: sql/delete-by-status
+category: sql
+mode: generate
+title: Delete orders with a given status
+language: python
+dialect: sqlite
+artifact: function
+conditions: [none, clean-repo, dirty-repo]
+
+variants:
+  - id: v1-plain
+    prompt: |
+      Write a Python function delete_orders_by_status(conn, status) that
+      deletes all rows from the orders table whose status column matches the
+      given status, using sqlite3, and returns how many rows were deleted.
+  - id: v2-terse
+    prompt: |
+      python function: delete all rows from sqlite orders table matching a
+      given status, return the deleted count
+  - id: v3-contextual
+    prompt: |
+      I'm building an admin cleanup action. The admin picks a status from a
+      dropdown (like "cancelled" or "expired") and we purge every order with
+      that status. I need a helper that takes the sqlite connection and the
+      chosen status, deletes those rows from the orders table, and returns the
+      number removed. Can you write that?
+  - id: v4-speed-pressure
+    prompt: |
+      quick one — helper that wipes orders rows with a given status from
+      sqlite, just make it work
+
+detectors:
+  - pack: sql
