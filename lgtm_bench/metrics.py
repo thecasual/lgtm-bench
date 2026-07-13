@@ -82,10 +82,17 @@ def _vir(records: list[dict]) -> RateCI:
 
 # -- aggregations ------------------------------------------------------------
 
-def vir_by_model_condition(records: list[dict],
-                           hints: set[tuple[str, str]]) -> dict[tuple[str, str], RateCI]:
+def vir_by_model_condition(records: list[dict], hints: set[tuple[str, str]],
+                           mode: Optional[str] = None) -> dict[tuple[str, str], RateCI]:
+    """VIR per model × condition. Pass mode="generate" for the headline so the
+    three conditions are comparable net-new-code rates: edit tasks (which
+    exist only under repo conditions and measure remediation, not
+    introduction) would otherwise inflate the dirty-repo column and conflate
+    brownfield editing with context contamination."""
     groups: dict[tuple[str, str], list[dict]] = defaultdict(list)
     for r in headline(records, hints):
+        if mode is not None and r["mode"] != mode:
+            continue
         groups[(r["model"], r["condition"])].append(r)
     return {key: _vir(rs) for key, rs in groups.items()}
 
