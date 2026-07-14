@@ -6,3 +6,4 @@ dist/
 results/
 report.md
 .pytest_cache/
+.env
