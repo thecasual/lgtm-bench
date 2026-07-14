@@ -1,54 +1,92 @@
 rules:
+  # ------------------------------------------------------------------
+  # fmt.Sprintf result flowing into a query/exec sink — directly or via
+  # an intermediate variable. Covers database/sql (*sql.DB, *sql.Tx,
+  # *sql.Conn), sqlx (Queryx/Get/Select/...), and GORM (Raw/Where/Order).
+  # The method allowlist is expressed with metavariable-regex so a single
+  # set of patterns covers every receiver shape.
+  # ------------------------------------------------------------------
   - id: sql.go.sprintf-into-query
     languages: [go]
     severity: ERROR
-    message: fmt.Sprintf builds a SQL query passed to db.Query/Exec/QueryRow
-    pattern-either:
-      - pattern: $DB.Query(fmt.Sprintf(...), ...)
-      - pattern: $DB.QueryRow(fmt.Sprintf(...), ...)
-      - pattern: $DB.Exec(fmt.Sprintf(...), ...)
-      - pattern: $DB.QueryContext($CTX, fmt.Sprintf(...), ...)
-      - pattern: $DB.ExecContext($CTX, fmt.Sprintf(...), ...)
-      - pattern: $DB.QueryRowContext($CTX, fmt.Sprintf(...), ...)
-      - pattern: |
-          $Q := fmt.Sprintf(...)
-          ...
-          $DB.Query($Q, ...)
-      - pattern: |
-          $Q := fmt.Sprintf(...)
-          ...
-          $DB.QueryRow($Q, ...)
-      - pattern: |
-          $Q := fmt.Sprintf(...)
-          ...
-          $DB.Exec($Q, ...)
-      - pattern: |
-          $Q := fmt.Sprintf(...)
-          ...
-          $DB.QueryContext($CTX, $Q, ...)
-      - pattern: |
-          $Q := fmt.Sprintf(...)
-          ...
-          $DB.ExecContext($CTX, $Q, ...)
+    message: >-
+      fmt.Sprintf builds a SQL query string that is passed to a query/exec
+      sink; interpolated values are not parameterized (SQL injection).
+    patterns:
+      - pattern-either:
+          - pattern: $DB.$M(fmt.Sprintf(...), ...)
+          - pattern: |
+              $Q := fmt.Sprintf(...)
+              ...
+              $DB.$M($Q, ...)
+          - pattern: |
+              $Q = fmt.Sprintf(...)
+              ...
+              $DB.$M($Q, ...)
+          - pattern: |
+              $Q := fmt.Sprintf(...)
+              ...
+              $DB.$M($CTX, $Q, ...)
+          - pattern: |
+              $Q = fmt.Sprintf(...)
+              ...
+              $DB.$M($CTX, $Q, ...)
+          - pattern: $DB.$M($CTX, fmt.Sprintf(...), ...)
+      - metavariable-regex:
+          metavariable: $M
+          regex: ^(Query|QueryRow|Exec|QueryContext|QueryRowContext|ExecContext|Queryx|QueryRowx|QueryxContext|Get|GetContext|Select|SelectContext|MustExec|Raw|Where|Having|Order|Prepare|PrepareContext)$
 
+  # ------------------------------------------------------------------
+  # String concatenation building a query string into a sink. Fires on any
+  # `+` in the query-string position, except the two well-known SAFE
+  # builders that still use `+`: strconv.Itoa/FormatInt for an integer
+  # LIMIT/OFFSET, and strings.Join for an IN-list of `?` placeholders.
+  # ------------------------------------------------------------------
   - id: sql.go.concat-into-query
     languages: [go]
     severity: ERROR
-    message: string concatenation builds a SQL query passed to db.Query/Exec
+    message: >-
+      string concatenation builds a SQL query string that is passed to a
+      query/exec sink; interpolated values are not parameterized (SQL
+      injection).
     patterns:
       - pattern-either:
-          - pattern: $DB.Query($A + $B, ...)
-          - pattern: $DB.QueryRow($A + $B, ...)
-          - pattern: $DB.Exec($A + $B, ...)
+          - pattern: $DB.$M($A + $B, ...)
+          - pattern: $DB.$M($CTX, $A + $B, ...)
           - pattern: |
               $Q := $A + $B
               ...
-              $DB.Query($Q, ...)
+              $DB.$M($Q, ...)
+          - pattern: |
+              $Q = $A + $B
+              ...
+              $DB.$M($Q, ...)
           - pattern: |
               $Q := $A + $B
               ...
-              $DB.Exec($Q, ...)
-      - metavariable-pattern:
-          metavariable: $B
-          patterns:
-            - pattern-not: '"..."'
+              $DB.$M($CTX, $Q, ...)
+      - metavariable-regex:
+          metavariable: $M
+          regex: ^(Query|QueryRow|Exec|QueryContext|QueryRowContext|ExecContext|Queryx|QueryRowx|QueryxContext|Get|GetContext|Select|SelectContext|MustExec|Raw|Where|Having|Order|Prepare|PrepareContext)$
+      # ---- carve-outs for safe `+`-based query builders ----
+      # integer LIMIT/OFFSET via strconv (value cannot carry SQL syntax)
+      - pattern-not: $DB.$M("..." + strconv.Itoa(...), ...)
+      - pattern-not: $DB.$M("..." + strconv.FormatInt(...), ...)
+      - pattern-not: |
+          $Q := "..." + strconv.Itoa(...)
+          ...
+          $DB.$M($Q, ...)
+      - pattern-not: |
+          $Q := "..." + strconv.FormatInt(...)
+          ...
+          $DB.$M($Q, ...)
+      # IN-list of `?` placeholders assembled with strings.Join
+      - pattern-not: $DB.$M($X + strings.Join(...) + $Y, ...)
+      - pattern-not: |
+          $Q := $X + strings.Join(...) + $Y
+          ...
+          $DB.$M($Q, ...)
+      - pattern-not: |
+          $Q := $X + strings.Join(...) + $Y
+          ...
+          $DB.$M($CTX, $Q, ...)
