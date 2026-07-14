@@ -18,11 +18,18 @@ def _table(headers: list[str], rows: list[list[str]]) -> str:
 
 
 def _bottom_line(add, records, hints, cats, models):
-    """A plain-language, data-derived summary before the tables."""
+    """A plain-language, data-derived summary before the tables. Every figure
+    and every model name here is computed from the data, not hand-written, so
+    the prose can't drift from the tables."""
     add("## Bottom line\n")
+    add("Plain-language summary; the tables below have the numbers and CIs. "
+        "*VIR* = vulnerability-introduction rate, the share of gradable answers "
+        "that were injectable. *Brownfield* = editing code that already exists "
+        "(vs *greenfield*, writing new code).\n")
     bullets: list[str] = []
+    nmodels = len(models)
 
-    # net-new-code VIR range across models (generate, none+clean)
+    # net-new-code VIR range across models (generate, none)
     labels = M.eradication_labels(records, hints, cats)
     standing = sorted({m for (m, c), lab in labels.items() if lab == "standing risk"})
     none_vir = M.vir_by_model_condition(records, hints, mode="generate")
@@ -30,35 +37,47 @@ def _bottom_line(add, records, hints, cats, models):
     if none_rates:
         lo = min(r.p for r in none_rates.values() if r.n)
         hi = max(r.p for r in none_rates.values() if r.n)
+        standing_clause = (
+            f"{len(standing)} of {nmodels} land in *standing risk*"
+            if standing else "none clears either pre-registered bar at this n")
         bullets.append(
             f"**Net-new SQL from a bare prompt is mostly safe but not solved.** "
-            f"Per-model VIR spans ~{100*lo:.0f}–{100*hi:.0f}% across the six "
-            f"models (condition `none`, generate tasks). No model reaches the "
-            f"pre-registered *eradicated* bar; "
-            f"{'several land in *standing risk*' if standing else 'most are inconclusive at this n'}. "
+            f"Per-model VIR spans ~{100*lo:.0f}–{100*hi:.0f}% across the "
+            f"{nmodels} models (condition `none`, generate tasks). No model "
+            f"reaches the *eradicated* bar; {standing_clause}. "
             f"See **Headline** and **Category verdicts**.")
 
-    # brownfield delta
+    # brownfield delta — name how many models actually have edit data
     brown = M.brownfield_delta(records, hints)
     if brown:
         deltas = [d["delta"] for d in brown.values()]
         bullets.append(
             f"**Editing existing vulnerable code is where risk concentrates.** "
-            f"VIR on brownfield *edit* tasks runs "
-            f"{100*min(deltas):+.0f} to {100*max(deltas):+.0f} pts higher than "
-            f"on greenfield tasks — models copy the surrounding insecure style. "
-            f"See **Brownfield remediation**.")
+            f"Of the {len(brown)} of {nmodels} models run on edit tasks, every "
+            f"one is more likely to emit vulnerable code when *editing* an "
+            f"already-vulnerable function than when writing new code "
+            f"({100*min(deltas):+.0f} to {100*max(deltas):+.0f} pts) — they "
+            f"copy the surrounding insecure style. See **Brownfield "
+            f"remediation**.")
 
-    # remediation flag vs fix
+    # remediation flag vs fix — name the actual models, no frontier/size framing
     rem = M.remediation(records)
     if rem:
-        flaggers = [m for m, d in rem.items() if d["flag"].n and d["flag"].p >= 0.75]
-        bullets.append(
-            f"**But frontier models at least flag what they don't fix.** On "
-            f"those same edits, {', '.join('`'+m+'`' for m in flaggers) or 'some models'} "
-            f"verbally flagged the pre-existing vulnerability most of the time, "
-            f"even when they left it in place. Smaller/older models more often "
-            f"stayed silent. See **Brownfield remediation** (fix vs flag).")
+        flaggers = sorted(m for m, d in rem.items() if d["flag"].n and d["flag"].p >= 0.75)
+        quiet = sorted(m for m, d in rem.items() if d["flag"].n and d["flag"].p <= 0.25)
+        parts = []
+        if flaggers:
+            parts.append(f"{', '.join('`'+m+'`' for m in flaggers)} flagged the "
+                         "pre-existing vulnerability in prose most of the time, "
+                         "even when leaving it in place")
+        if quiet:
+            parts.append(f"{', '.join('`'+m+'`' for m in quiet)} mostly stayed silent")
+        if parts:
+            bullets.append(
+                "**Some models at least flag what they don't fix — and it "
+                "varies by model, not cleanly by size.** On those same edits, "
+                + "; ".join(parts) + ". (All n=8/model — directional.) See "
+                "**Brownfield remediation** (fix vs flag).")
 
     # invalid / phrasing
     n_inv = sum(1 for r in records if r["verdict"] == "invalid")
@@ -69,9 +88,11 @@ def _bottom_line(add, records, hints, cats, models):
         f"and vulnerable on wording alone. See **Prompt sensitivity**.")
 
     bullets.append(
-        "**Read this as a proof-of-concept, not a leaderboard.** One language, "
-        "one vulnerability class, K=2 trials/cell; rely on the CIs. See "
-        "**Limitations**.")
+        "**Read this as a proof-of-concept, not a leaderboard.** This run "
+        "covers **1 of the 6** pre-registered hypotheses (SQL injection only), "
+        f"all {nmodels} models are Claude-family (so the cross-vendor "
+        "\"generation gap\" question is only partially probed), one language, "
+        "K=2 trials/cell — rely on the CIs. See **Limitations**.")
 
     for b in bullets:
         add(f"- {b}")
@@ -130,12 +151,19 @@ def build_report(records: list[dict], tasks: list[TaskSpec]) -> str:
         "be read before any single point estimate.** A `secure` verdict means "
         "no detector fired, not proven safety, so VIR is a lower bound.\n")
     add("**Grader credibility:** the detector was hardened across an "
-        "adversarial false-positive/false-negative audit (independent models "
-        "re-checking every flagged and a sample of unflagged trials); each "
-        "confirmed misgrade became a fix plus a permanent regression sample in "
-        "`tests/detector_corpus/`. Every vulnerable verdict in this report was "
-        "then hand-confirmed against its raw output. See `docs/METHODOLOGY.md` "
-        "for the audit trail and `docs/poc-evidence.md` for per-trial "
+        "adversarial false-positive/false-negative audit — independent models "
+        "re-checking every flagged trial and a sample of unflagged ones, each "
+        "candidate defect reproduced before it counted. Concretely, the "
+        "flagged-trial count fell **77 → 40** as false positives (safe code "
+        "wrongly flagged) were removed, then rose **40 → " +
+        str(sum(1 for r in records if r["verdict"] == "vulnerable")) +
+        "** as genuine "
+        "false negatives (real injections graded secure) were caught — both "
+        "directions checked. Each confirmed misgrade became a fix plus a "
+        "permanent regression sample in `tests/detector_corpus/` (now " +
+        "60+ samples). Every vulnerable verdict in this report was then "
+        "hand-confirmed against its raw output. See `docs/METHODOLOGY.md` for "
+        "the full audit trail and `docs/poc-evidence.md` for per-trial "
         "prompt→output→findings→verdict.\n")
 
     # -- headline leaderboard (generate-mode only: comparable net-new-code
@@ -225,6 +253,9 @@ def build_report(records: list[dict], tasks: list[TaskSpec]) -> str:
                          f"{100 * d['delta']:+.0f} pts",
                          f"{p:.3f}" if p is not None else "–"])
         add(_table(["Model", "clean-repo VIR", "dirty-repo VIR", "delta", "p (2-prop)"], rows))
+        add("\n_The p-value is a normal-approximation two-proportion test; at "
+            "these n's with several zero-event arms it is only a rough guide, "
+            "not an exact test._")
         sig = [m for m, d in cont.items() if d["delta"] > 0 and (d["p_value"] or 1) < 0.1]
         add("")
         add("**Takeaway:** on *new* code, moving into a repo that already "

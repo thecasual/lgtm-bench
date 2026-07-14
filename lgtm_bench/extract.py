@@ -2,10 +2,19 @@
 from __future__ import annotations
 
 import ast
+import json
 import re
 import textwrap
 
 FENCE_RE = re.compile(r"```[ \t]*([A-Za-z0-9_+-]*)[^\n]*\n(.*?)```", re.DOTALL)
+
+# JSON-shaped simulated tool call: {"tool_name": "Write", "tool_input":
+# {"content": "CODE"}} inside a <function_calls> block. Pull the content-bearing
+# JSON string values (properly unescaped), never path/pattern/command.
+JSON_PARAM_RE = re.compile(
+    r'"(?:content|file_text|file_contents|code|new_str)"\s*:\s*("(?:[^"\\]|\\.)*")',
+    re.DOTALL,
+)
 
 # Agentic tool-call XML: code emitted inside a simulated file-write tool call,
 # e.g. <invoke name="Write"><parameter name="content">CODE</parameter></invoke>.
@@ -68,6 +77,30 @@ def _largest_parseable_span(raw: str) -> str | None:
     return best
 
 
+def _has_definition(code: str) -> bool:
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return False
+    return any(isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+               for n in ast.walk(tree))
+
+
+def _tool_call_code(raw: str) -> str | None:
+    """Concatenated code from simulated tool calls — XML <parameter> blocks or
+    JSON-shaped {"content": "..."} tool_input — or None if there are none."""
+    parts = list(PARAM_RE.findall(raw))
+    for quoted in JSON_PARAM_RE.findall(raw):
+        try:
+            val = json.loads(quoted)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if isinstance(val, str) and val.strip():
+            parts.append(val)
+    parts = [textwrap.dedent(p).strip() for p in parts if p.strip()]
+    return "\n\n".join(parts).strip() if parts else None
+
+
 def extract_code(raw: str, language: str = "python") -> str:
     """Pull code from markdown fences; fall back to lighter-weight heuristics.
 
@@ -85,13 +118,21 @@ def extract_code(raw: str, language: str = "python") -> str:
         # Only foreign-tagged fences (e.g. ```bash usage note) — grade the
         # largest fence anyway rather than declaring the trial code-free.
         chosen = [max((body for _, body in blocks), key=len)]
-    if chosen:
-        return "\n\n".join(textwrap.dedent(b).strip() for b in chosen).strip()
 
-    # No usable markdown fences. Try agentic tool-call XML parameter blocks.
-    params = PARAM_RE.findall(raw)
-    if params:
-        return "\n\n".join(textwrap.dedent(p).strip() for p in params).strip()
+    # Tool-call code (XML or JSON-shaped simulated file write) is the model's
+    # actual deliverable; a markdown fence in the same answer is often just a
+    # usage example. If the chosen fence carries no definition but a tool-call
+    # block does, prefer the tool-call code.
+    tool_code = _tool_call_code(raw)
+
+    if chosen:
+        fence_code = "\n\n".join(textwrap.dedent(b).strip() for b in chosen).strip()
+        if tool_code and not _has_definition(fence_code) and _has_definition(tool_code):
+            return tool_code
+        return fence_code
+
+    if tool_code:
+        return tool_code
 
     # Last resort: the largest parseable span buried in running prose.
     span = _largest_parseable_span(raw)

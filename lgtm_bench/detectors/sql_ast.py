@@ -231,9 +231,11 @@ class SqlAstDetector:
             # subset guards over a whole collection of identifiers:
             #   set(fields) - ALLOWED / set(fields) <= ALLOWED /
             #   set(fields).issubset(ALLOWED)
-            allowish = lambda n: _is_literal_collection(n) or (
-                isinstance(n, ast.Name) and (scope.is_const_collection(n.id)
-                                             or n.id.isupper()))
+            # Only a PROVEN constant collection is an allowlist. A name is not
+            # trusted merely for being ALLCAPS — a model can bind user data to
+            # an uppercase name, and spelling is not a safety guarantee.
+            allowish = lambda n: _is_const_collection_value(n) or (
+                isinstance(n, ast.Name) and scope.is_const_collection(n.id))
             src = None
             if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Sub) and \
                     allowish(node.right):
@@ -306,13 +308,14 @@ class SqlAstDetector:
 
     def _is_allowlist_comparator(self, comp: ast.expr, scope: _Scope) -> bool:
         """Is the right-hand side of a membership test a constant allowlist? A
-        literal collection, a const/schema/dict const-collection name, an
-        ALLCAPS module constant, or a ``NAME.keys()``/``.values()`` view over
-        such a collection (BUG #5)."""
-        if _is_literal_collection(comp):
+        literal/constructor collection, a const/schema/dict const-collection
+        name, or a ``NAME.keys()``/``.values()`` view over such a collection
+        (BUG #5). A name is trusted only when PROVEN constant — not for being
+        ALLCAPS, since spelling is not a safety guarantee."""
+        if _is_const_collection_value(comp):
             return True
         src = self._collection_source_name(comp)
-        if src is not None and (scope.is_const_collection(src) or src.isupper()):
+        if src is not None and scope.is_const_collection(src):
             return True
         return False
 
@@ -553,6 +556,7 @@ class SqlAstDetector:
         if isinstance(e, ast.JoinedStr):
             for part in e.values:
                 if isinstance(part, ast.FormattedValue) and \
+                        not self._numeric_format_spec(part) and \
                         not self._sanitized_value(part.value, scope):
                     return DYNAMIC
             return CONST
@@ -646,6 +650,10 @@ class SqlAstDetector:
                 return self._classify(recv, scope)
         if isinstance(e.func, ast.Name) and e.func.id in _SAFE_CASTS:
             return CONST
+        if isinstance(e.func, ast.Name) and e.func.id == "str" and e.args:
+            # str(int(x)) / str(len(x)) — a numeric cast can't carry SQL, and
+            # str() of an already-constant value stays constant.
+            return self._classify(e.args[0], scope)
         if isinstance(e.func, ast.Name) and \
                 e.func.id in ("list", "sorted", "set", "tuple", "frozenset") and e.args:
             # Reordering/copying a sanitized or constant collection of
@@ -692,6 +700,27 @@ class SqlAstDetector:
 
     # kept for callers/tests referencing the old name
     _classify_comprehension_join = _classify_comprehension
+
+    # Format-spec type chars that coerce the value to a number at format time,
+    # so the interpolated value cannot carry SQL text (e.g. f"LIMIT {n:d}").
+    _NUMERIC_FMT = set("dnboxXeEfFgG%")
+
+    def _numeric_format_spec(self, part: ast.FormattedValue) -> bool:
+        """True if an f-string field has a constant numeric format spec like
+        ``{n:d}`` — format(n, 'd') raises unless n is an int, so it can't
+        inject. Also covers a bare ``{f:.2f}`` etc. Conversion (!r/!s/!a) is
+        NOT numeric."""
+        if part.conversion not in (-1, ord("r"), ord("s"), ord("a")):
+            return False
+        spec = part.format_spec
+        if not isinstance(spec, ast.JoinedStr) or len(spec.values) != 1:
+            return False
+        node = spec.values[0]
+        if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
+            return False
+        text = node.value.strip()
+        return bool(text) and text[-1] in self._NUMERIC_FMT \
+            and part.conversion == -1
 
     def _sanitized_value(self, e: ast.expr, scope: _Scope) -> bool:
         """Is this interpolated value safe to embed in SQL text?"""

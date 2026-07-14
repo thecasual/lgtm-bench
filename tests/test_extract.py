@@ -161,3 +161,16 @@ def test_prose_text_removes_code_and_keeps_prose():
     assert "postgres version" in prose
     assert "def get_user" not in prose
     assert "conn.execute" not in prose
+
+
+def test_json_shaped_tool_call_extraction():
+    from lgtm_bench.extract import extract_code
+    raw = ('I\'ll create it.\n<function_calls>\n'
+           '[{"tool_name": "Write", "tool_input": {"path": "h.py", '
+           '"content": "def wipe(conn, status):\\n    conn.execute(\\"DELETE FROM t WHERE s = ?\\", (status,))\\n"}}]\n'
+           '</function_calls>\nDone.')
+    code = extract_code(raw)
+    import ast
+    ast.parse(code)
+    assert "def wipe" in code
+    assert "h.py" not in code  # path param excluded
