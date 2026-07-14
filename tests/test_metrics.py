@@ -177,3 +177,20 @@ def test_remediation_counts_fixed_and_flagged():
     assert d["n"] == 3
     assert (d["fix"].k, d["fix"].n) == (1, 3)
     assert (d["flag"].k, d["flag"].n) == (2, 3)
+
+
+def test_html_report_builds_and_is_self_contained(tmp_path):
+    import glob, json
+    from lgtm_bench.html_report import build_html_report
+    from lgtm_bench.schema import load_tasks
+    from pathlib import Path
+    from lgtm_bench.store import load_records
+    recs = load_records([Path(f) for f in glob.glob("results-published/*.jsonl")])
+    if not recs:
+        return
+    html = build_html_report(recs, load_tasks(Path("tasks")))
+    assert html.strip().startswith("<!doctype")
+    assert "<svg" in html
+    # no external stylesheet/script/image resources
+    assert 'src="http' not in html
+    assert "<link" not in html and "<script" not in html

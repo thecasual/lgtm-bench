@@ -99,13 +99,23 @@ def report(
     results: list[Path] = typer.Argument(..., help="one or more results JSONL files"),
     tasks: Path = typer.Option(Path("tasks")),
     out: Path = typer.Option(Path("report.md")),
+    fmt: str = typer.Option("md", "--format", help="md | html"),
 ):
-    from .report import write_report
     records = load_records(results)
     if not records:
         typer.echo("no records found", err=True)
         raise typer.Exit(1)
-    write_report(records, load_tasks(tasks), out)
+    tasklist = load_tasks(tasks)
+    if fmt == "html":
+        from .html_report import write_html_report
+        if str(out) == "report.md":
+            out = Path("report.html")
+        write_html_report(records, tasklist, out)
+    elif fmt == "md":
+        from .report import write_report
+        write_report(records, tasklist, out)
+    else:
+        raise typer.BadParameter("--format must be 'md' or 'html'")
     typer.echo(f"report: {out}")
 
 

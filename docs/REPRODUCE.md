@@ -24,9 +24,16 @@ for f in results-published/run-*.jsonl; do
   lgtm detect "$f" --tasks tasks --out "/tmp/$(basename "$f")"
 done
 lgtm report /tmp/run-*.jsonl --tasks tasks --out /tmp/report.md
+lgtm report /tmp/run-*.jsonl --tasks tasks --format html --out /tmp/report.html
 lgtm evidence /tmp/run-*.jsonl --out /tmp/evidence.md
 diff <(git show HEAD:docs/poc-report.md) /tmp/report.md   # should match
 ```
+
+The HTML report (`--format html`) is a single self-contained file (inline CSS +
+SVG charts, no external assets) built for a "download report" link or hosting on
+a blog. Rebrand it by editing the `BRAND` dict at the top of
+`lgtm_bench/html_report.py`: palette, fonts, wordmark, title, and links live
+there.
 
 This proves the report is a pure function of the raw data + the committed
 detector — nothing hand-edited.

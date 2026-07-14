@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Does an LLM Write Secure Code? · Sam Wallace</title>
+<style>
+:root {
+  --bg:#0f172a; --bg-soft:#1e293b; --surface:#1e293b; --surface-2:#334155;
+  --border:#334155; --text:#f1f5f9; --text-dim:#94a3b8;
+  --accent:#3b82f6; --accent-2:#60a5fa;
+  --good:#22c55e; --warn:#f59e0b; --bad:#ef4444;
+  --font:'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; --mono:'JetBrains Mono', 'Fira Code', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+}
+* { box-sizing:border-box; }
+html { scroll-behavior:smooth; }
+body { margin:0; background:var(--bg); color:var(--text); font-family:var(--font);
+  line-height:1.6; -webkit-font-smoothing:antialiased; }
+.wrap { max-width:860px; margin:0 auto; padding:0 24px 80px; }
+a { color:var(--accent); text-decoration:none; }
+a:hover { text-decoration:underline; }
+code { font-family:var(--mono); background:var(--surface-2); padding:1px 6px;
+  border-radius:5px; font-size:.88em; }
+em { color:var(--text); font-style:normal; border-bottom:2px solid var(--accent-2);
+  padding-bottom:1px; }
+
+.masthead { padding:64px 0 40px; border-bottom:1px solid var(--border); }
+.brandrow { display:flex; align-items:center; gap:14px; margin-bottom:28px; }
+.wordmark { font-family:var(--mono); font-weight:700; letter-spacing:-.02em;
+  background:linear-gradient(90deg,var(--accent),var(--accent-2));
+  -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; }
+.kicker { font-size:.72rem; text-transform:uppercase; letter-spacing:.14em;
+  color:var(--text-dim); padding-left:14px; border-left:1px solid var(--border); }
+h1 { font-size:clamp(2rem,5vw,3.1rem); line-height:1.08; letter-spacing:-.03em;
+  margin:.2em 0 .3em; }
+.subtitle { font-size:1.18rem; color:var(--text-dim); max-width:60ch; margin:0 0 28px; }
+.meta { display:flex; flex-wrap:wrap; gap:20px; font-size:.9rem; color:var(--text-dim);
+  margin-bottom:28px; }
+.meta b { color:var(--text); }
+.btnrow { display:flex; gap:12px; flex-wrap:wrap; }
+.btn { font:inherit; font-size:.92rem; font-weight:600; cursor:pointer;
+  padding:11px 20px; border-radius:10px; border:1px solid transparent;
+  background:linear-gradient(90deg,var(--accent),var(--accent-2)); color:#fff; }
+.btn.ghost { background:transparent; border-color:var(--border); color:var(--text); }
+.btn:hover { filter:brightness(1.08); }
+
+section { padding:44px 0; border-bottom:1px solid var(--border); }
+h2 { font-size:1.7rem; letter-spacing:-.02em; margin:0 0 .5em; display:flex;
+  align-items:baseline; gap:14px; }
+.num { font-family:var(--mono); font-size:1rem; color:var(--accent);
+  border:1px solid var(--border); border-radius:8px; padding:3px 9px; }
+h3 { font-size:1.15rem; margin:0 0 .4em; }
+p { margin:.6em 0; }
+.muted { color:var(--text-dim); }
+
+.tldr { padding-top:40px; }
+.lede { font-size:1.3rem; line-height:1.5; color:var(--text); max-width:62ch; }
+.callout { background:var(--bg-soft); border:1px solid var(--border); border-radius:16px;
+  padding:26px 30px; }
+.callout h3 { color:var(--accent); }
+
+.card { background:var(--surface); border:1px solid var(--border); border-radius:16px;
+  padding:22px 24px 10px; margin:20px 0; }
+.cardhead { font-size:.78rem; text-transform:uppercase; letter-spacing:.1em;
+  color:var(--text-dim); margin-bottom:14px; }
+.fig-note { font-size:.85rem; color:var(--text-dim); margin:6px 0 14px; }
+
+.chart { display:block; }
+.chart .cl { fill:var(--text); font:13px var(--font); }
+.chart .cv { fill:var(--text-dim); font:12px var(--mono); }
+.chart .ccap { fill:var(--text-dim); font:10px var(--mono); }
+.ctrack { fill:var(--surface-2); }
+.legend { display:flex; gap:20px; font-size:.82rem; color:var(--text-dim);
+  padding:6px 0 14px; }
+.legend .sw { display:inline-block; width:11px; height:11px; border-radius:3px;
+  margin-right:6px; vertical-align:middle; }
+
+.statgrid { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr));
+  gap:16px; margin:18px 0; }
+.stat { background:var(--surface); border:1px solid var(--border); border-radius:14px;
+  padding:22px; }
+.statnum { font-size:2rem; font-weight:700; letter-spacing:-.02em;
+  background:linear-gradient(90deg,var(--accent),var(--accent-2));
+  -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; }
+.statlbl { font-size:.9rem; color:var(--text-dim); margin-top:4px; }
+
+.guidance .checks { list-style:none; padding:0; margin:0; }
+.checks li { padding:14px 0 14px 34px; position:relative; border-bottom:1px solid var(--border); }
+.checks li:before { content:'✓'; position:absolute; left:0; top:14px; color:var(--good);
+  font-weight:700; }
+.checks b { color:var(--text); }
+
+.method .limits { background:var(--bg-soft); border-left:3px solid var(--warn);
+  border-radius:8px; padding:14px 18px; font-size:.92rem; color:var(--text-dim);
+  margin-top:14px; }
+.method .limits b { color:var(--text); }
+
+footer { padding:40px 0 0; font-size:.88rem; }
+footer .muted { margin-top:10px; font-family:var(--mono); font-size:.78rem; }
+
+@media (max-width:600px) { .masthead { padding-top:40px; } }
+@media print {
+  body { background:#fff; color:#111; }
+  .btnrow { display:none; }
+  .wrap { max-width:100%; }
+  section, .masthead { border-color:#ddd; }
+  .card, .callout, .stat, .method .limits { background:#fafafa; border-color:#ddd; }
+  a, .num { color:#0b5; }
+}
+</style>
+</head>
+<body>
+<div class='wrap'>
+<header class='masthead'>
+<div class='brandrow'><span class='wordmark'>Sam Wallace</span><span class='kicker'>Security Research</span></div>
+<h1>Does an LLM Write Secure Code?</h1>
+<p class='subtitle'>How often six Claude models introduce SQL injection, where the risk actually lives, and what it means for how you prompt, review, and spend tokens.</p>
+<div class='meta'>
+<span><b>440</b> trials</span><span><b>6</b> models</span><span><b>47</b> flagged vulnerable</span><span>detector <b>sql@0.9.0</b></span>
+</div>
+<div class='btnrow'>
+<button class='btn' onclick='window.print()'>⤓ Save as PDF</button>
+<a class='btn ghost' href='https://github.com/thecasual/lgtm-bench'>View the code &amp; raw data →</a>
+</div>
+</header>
+<section class='tldr'>
+<h2>Short version</h2>
+<p class='lede'>Frontier models basically don't write SQL injection into <em>new</em> code anymore. They will happily copy it out of code that already has it. And whether they even <em>tell you</em> about the existing hole depends heavily on which model you picked. Your prompt moves both the risk and the bill.</p>
+</section>
+<section class='callout'>
+<h3>This is a cost problem, not just a security one</h3>
+<p>A vulnerability that ships is the most expensive output you can generate. You pay for it in re-prompts, review time, a rewrite, and incident response if it reaches prod. The data points at two cheap controls upstream of all of that. Lazy "just bang it out" prompts raised the injection rate (<b>6% to 14%</b>) and returned <b>no usable code 30% of the time</b>, so you burn round-trips getting nothing. And because insecure code is contagious (finding 03), fixing the vulnerable patterns already in your repo buys you more than swapping models.</p>
+</section>
+<section>
+<h2><span class='num'>01</span> New code is mostly safe, but it's a gradient</h2>
+<p>Same everyday questions, no repo context. The models split hard. Frontier models sit near zero. The prior-generation Sonnet and the smaller models are several times higher. So "the latest models don't write SQLi" is true, but only for the newest and largest ones. Treat model choice as a real security lever for greenfield work.</p>
+<div class='card'>
+<div class='cardhead'>Injection rate, new code, bare prompt (lower is better)</div>
+<svg viewBox='0 0 640 214' class='chart' role='img' width='100%'><text x='190' y='22' text-anchor='end' class='cl'>claude-opus-4-1</text><rect x='200' y='10' width='380' height='16' rx='4' class='ctrack'/><rect x='200' y='10' width='2.0' height='16' rx='4' fill='var(--good)'/><text x='210.0' y='22' class='cv'>0%</text><text x='190' y='33' text-anchor='end' class='ccap'>n=41</text><text x='190' y='56' text-anchor='end' class='cl'>claude-opus-4-8</text><rect x='200' y='44' width='380' height='16' rx='4' class='ctrack'/><rect x='200' y='44' width='40.7' height='16' rx='4' fill='var(--good)'/><text x='248.7' y='56' class='cv'>2%</text><text x='190' y='67' text-anchor='end' class='ccap'>n=42</text><text x='190' y='90' text-anchor='end' class='cl'>claude-fable-5</text><rect x='200' y='78' width='380' height='16' rx='4' class='ctrack'/><rect x='200' y='78' width='42.8' height='16' rx='4' fill='var(--good)'/><text x='250.8' y='90' class='cv'>2%</text><text x='190' y='101' text-anchor='end' class='ccap'>n=40</text><text x='190' y='124' text-anchor='end' class='cl'>claude-sonnet-5</text><rect x='200' y='112' width='380' height='16' rx='4' class='ctrack'/><rect x='200' y='112' width='138.6' height='16' rx='4' fill='var(--warn)'/><text x='346.6' y='124' class='cv'>8%</text><text x='190' y='135' text-anchor='end' class='ccap'>n=37</text><text x='190' y='158' text-anchor='end' class='cl'>claude-haiku-4-5</text><rect x='200' y='146' width='380' height='16' rx='4' class='ctrack'/><rect x='200' y='146' width='299.2' height='16' rx='4' fill='var(--warn)'/><text x='507.2' y='158' class='cv'>18%</text><text x='190' y='169' text-anchor='end' class='ccap'>n=40</text><text x='190' y='192' text-anchor='end' class='cl'>claude-sonnet-4-5</text><rect x='200' y='180' width='380' height='16' rx='4' class='ctrack'/><rect x='200' y='180' width='380.0' height='16' rx='4' fill='var(--warn)'/><text x='588.0' y='192' class='cv'>22%</text><text x='190' y='203' text-anchor='end' class='ccap'>n=45</text></svg>
+<p class='fig-note'>Static detection, so these are floors. Small n, so read the gradient, not the exact ordering.</p>
+</div></section>
+<section>
+<h2><span class='num'>02</span> The risk is in the task shape, not the model</h2>
+<p>Most task types came back <b>0% vulnerable across every model</b>. The entire risk lives in the cases you <b>can't</b> parameterize: dynamic column names, <code>ORDER BY</code>, and <code>WHERE</code> assembly from a dict. Those are the spots where staying safe means the model has to decide to add an allowlist. Anywhere a <code>?</code> placeholder works, the models use it without being asked. Point your review and your linters at the non-parameterizable cases and ignore the rest.</p>
+<div class='card'>
+<div class='cardhead'>Injection rate by task type, new code, all models pooled</div>
+<svg viewBox='0 0 640 418' class='chart' role='img' width='100%'><text x='200' y='22' text-anchor='end' class='cl'>update-profile-fields</text><rect x='210' y='10' width='370' height='16' rx='4' class='ctrack'/><rect x='210' y='10' width='370.0' height='16' rx='4' fill='var(--bad)'/><text x='588.0' y='22' class='cv'>36%</text><text x='200' y='33' text-anchor='end' class='ccap'>8/22</text><text x='200' y='56' text-anchor='end' class='cl'>dynamic-filter-where</text><rect x='210' y='44' width='370' height='16' rx='4' class='ctrack'/><rect x='210' y='44' width='296.8' height='16' rx='4' fill='var(--bad)'/><text x='514.8' y='56' class='cv'>29%</text><text x='200' y='67' text-anchor='end' class='ccap'>7/24</text><text x='200' y='90' text-anchor='end' class='cl'>insert-from-form</text><rect x='210' y='78' width='370' height='16' rx='4' class='ctrack'/><rect x='210' y='78' width='254.4' height='16' rx='4' fill='var(--bad)'/><text x='472.4' y='90' class='cv'>25%</text><text x='200' y='101' text-anchor='end' class='ccap'>4/16</text><text x='200' y='124' text-anchor='end' class='cl'>order-by-column</text><rect x='210' y='112' width='370' height='16' rx='4' class='ctrack'/><rect x='210' y='112' width='132.7' height='16' rx='4' fill='var(--warn)'/><text x='350.7' y='124' class='cv'>13%</text><text x='200' y='135' text-anchor='end' class='ccap'>3/23</text><text x='200' y='158' text-anchor='end' class='cl'>count-by-email-domain</text><rect x='210' y='146' width='370' height='16' rx='4' class='ctrack'/><rect x='210' y='146' width='2.0' height='16' rx='4' fill='var(--good)'/><text x='220.0' y='158' class='cv'>0%</text><text x='200' y='169' text-anchor='end' class='ccap'>0/13</text><text x='200' y='192' text-anchor='end' class='cl'>delete-by-status</text><rect x='210' y='180' width='370' height='16' rx='4' class='ctrack'/><rect x='210' y='180' width='2.0' height='16' rx='4' fill='var(--good)'/><text x='220.0' y='192' class='cv'>0%</text><text x='200' y='203' text-anchor='end' class='ccap'>0/18</text><text x='200' y='226' text-anchor='end' class='cl'>get-user-by-id</text><rect x='210' y='214' width='370' height='16' rx='4' class='ctrack'/><rect x='210' y='214' width='2.0' height='16' rx='4' fill='var(--good)'/><text x='220.0' y='226' class='cv'>0%</text><text x='200' y='237' text-anchor='end' class='ccap'>0/23</text><text x='200' y='260' text-anchor='end' class='cl'>in-list-expansion</text><rect x='210' y='248' width='370' height='16' rx='4' class='ctrack'/><rect x='210' y='248' width='2.0' height='16' rx='4' fill='var(--good)'/><text x='220.0' y='260' class='cv'>0%</text><text x='200' y='271' text-anchor='end' class='ccap'>0/24</text><text x='200' y='294' text-anchor='end' class='cl'>pagination-limit-offset</text><rect x='210' y='282' width='370' height='16' rx='4' class='ctrack'/><rect x='210' y='282' width='2.0' height='16' rx='4' fill='var(--good)'/><text x='220.0' y='294' class='cv'>0%</text><text x='200' y='305' text-anchor='end' class='ccap'>0/15</text><text x='200' y='328' text-anchor='end' class='cl'>raw-sql-top-customers</text><rect x='210' y='316' width='370' height='16' rx='4' class='ctrack'/><rect x='210' y='316' width='2.0' height='16' rx='4' fill='var(--good)'/><text x='220.0' y='328' class='cv'>0%</text><text x='200' y='339' text-anchor='end' class='ccap'>0/24</text><text x='200' y='362' text-anchor='end' class='cl'>search-products-like</text><rect x='210' y='350' width='370' height='16' rx='4' class='ctrack'/><rect x='210' y='350' width='2.0' height='16' rx='4' fill='var(--good)'/><text x='220.0' y='362' class='cv'>0%</text><text x='200' y='373' text-anchor='end' class='ccap'>0/22</text><text x='200' y='396' text-anchor='end' class='cl'>user-lookup-by-email</text><rect x='210' y='384' width='370' height='16' rx='4' class='ctrack'/><rect x='210' y='384' width='2.0' height='16' rx='4' fill='var(--good)'/><text x='220.0' y='396' class='cv'>0%</text><text x='200' y='407' text-anchor='end' class='ccap'>0/21</text></svg>
+</div></section>
+<section>
+<h2><span class='num'>03</span> The big one: existing bad code is contagious</h2>
+<p>The largest effect in the whole run has nothing to do with which model you use. It's context. Ask a model to make an unrelated edit to a function that <b>already</b> has an injection in it, and its odds of shipping vulnerable code jump hard versus writing the same logic from scratch. The models pattern-match the surrounding code. If the file is insecure, the edit tends to be too. This is the finding to build policy around: your existing tech debt is a security multiplier the moment an LLM touches it.</p>
+<div class='card'>
+<div class='cardhead'>New code vs editing an already-vulnerable function</div>
+<svg viewBox='0 0 640 204' class='chart' width='100%'><text x='190' y='24' text-anchor='end' class='cl'>claude-haiku-4-5</text><rect x='200' y='10' width='2.0' height='13' rx='3' fill='var(--text-dim)'/><text x='208.0' y='21' class='cv'>0%</text><rect x='200' y='26' width='332.5' height='13' rx='3' fill='var(--bad)'/><text x='538.5' y='37' class='cv'>44%</text><text x='190' y='70' text-anchor='end' class='cl'>claude-sonnet-4-5</text><rect x='200' y='56' width='47.5' height='13' rx='3' fill='var(--text-dim)'/><text x='253.5' y='67' class='cv'>6%</text><rect x='200' y='72' width='380.0' height='13' rx='3' fill='var(--bad)'/><text x='586.0' y='83' class='cv'>50%</text><text x='190' y='116' text-anchor='end' class='cl'>claude-sonnet-5</text><rect x='200' y='102' width='2.0' height='13' rx='3' fill='var(--text-dim)'/><text x='208.0' y='113' class='cv'>0%</text><rect x='200' y='118' width='332.5' height='13' rx='3' fill='var(--bad)'/><text x='538.5' y='129' class='cv'>44%</text><text x='190' y='162' text-anchor='end' class='cl'>claude-fable-5</text><rect x='200' y='148' width='2.0' height='13' rx='3' fill='var(--text-dim)'/><text x='208.0' y='159' class='cv'>0%</text><rect x='200' y='164' width='95.0' height='13' rx='3' fill='var(--bad)'/><text x='301.0' y='175' class='cv'>12%</text></svg><div class='legend'><span><i class='sw' style='background:var(--text-dim)'></i>greenfield (new code)</span><span><i class='sw' style='background:var(--bad)'></i>editing existing vulnerable code</span></div>
+<p class='fig-note'>Every model with edit-task data is far more likely to introduce a vulnerability when editing insecure code than when writing new code.</p>
+</div></section>
+<section>
+<h2><span class='num'>04</span> Some models tell you about the hole they didn't fix</h2>
+<p>On those same edits, "did it quietly fix the existing bug" and "did it flag it in prose" are two different questions with different answers. Flagging and fixing are separate skills. For a reviewer, a model that calls out what it left unfixed is worth a lot, sometimes more than a lower raw rate, because it turns a silent risk into a review comment.</p>
+<div class='card'>
+<div class='cardhead'>Flagged the existing vulnerability in prose, edit tasks</div>
+<svg viewBox='0 0 640 146' class='chart' role='img' width='100%'><text x='190' y='22' text-anchor='end' class='cl'>claude-fable-5</text><rect x='200' y='10' width='380' height='16' rx='4' class='ctrack'/><rect x='200' y='10' width='380.0' height='16' rx='4' fill='var(--good)'/><text x='588.0' y='22' class='cv'>100%</text><text x='190' y='33' text-anchor='end' class='ccap'>fixed 62%</text><text x='190' y='56' text-anchor='end' class='cl'>claude-sonnet-5</text><rect x='200' y='44' width='380' height='16' rx='4' class='ctrack'/><rect x='200' y='44' width='380.0' height='16' rx='4' fill='var(--good)'/><text x='588.0' y='56' class='cv'>100%</text><text x='190' y='67' text-anchor='end' class='ccap'>fixed 25%</text><text x='190' y='90' text-anchor='end' class='cl'>claude-sonnet-4-5</text><rect x='200' y='78' width='380' height='16' rx='4' class='ctrack'/><rect x='200' y='78' width='95.0' height='16' rx='4' fill='var(--bad)'/><text x='303.0' y='90' class='cv'>25%</text><text x='190' y='101' text-anchor='end' class='ccap'>fixed 0%</text><text x='190' y='124' text-anchor='end' class='cl'>claude-haiku-4-5</text><rect x='200' y='112' width='380' height='16' rx='4' class='ctrack'/><rect x='200' y='112' width='47.5' height='16' rx='4' fill='var(--bad)'/><text x='255.5' y='124' class='cv'>12%</text><text x='190' y='135' text-anchor='end' class='ccap'>fixed 12%</text></svg>
+<p class='fig-note'>Caption is how often each model actually <em>fixed</em> it. High flag with low fix means it saw the problem and shipped it anyway. n=8 per model, so directional.</p>
+</div></section>
+<section>
+<h2><span class='num'>05</span> Prompt quality is a free security and cost control</h2>
+<div class='statgrid'>
+<div class='stat'><div class='statnum'>6% to 14%</div><div class='statlbl'>injection rate, clear prompt vs "quick, don't overthink it"</div></div>
+<div class='stat'><div class='statnum'>30%</div><div class='statlbl'>of lazy prompts returned no usable code, so you pay for nothing</div></div>
+<div class='stat'><div class='statnum'>0%</div><div class='statlbl'>of clear prompts returned no usable code</div></div>
+</div>
+<p>Specific prompts cost nothing extra and measurably lower both the injection rate and the wasted-token rate. A vague prompt isn't just lower quality output, it's a security and budget problem. Write the interface and the data source into the prompt and you get safer code and fewer dead round-trips.</p>
+</section>
+<section class='guidance'>
+<h2>What to actually do about it</h2>
+<ul class='checks'>
+<li><b>Prompt with specifics.</b> Put the interface and the data source in the prompt. Lazy prompts doubled the injection rate and returned nothing a third of the time. This is the cheapest control you have.</li>
+<li><b>Clean the repo before the LLM touches it.</b> Pre-existing insecure code was the strongest risk factor in the whole run. Fix the known patterns first, because the model copies whatever is around the edit.</li>
+<li><b>Gate the diff, not the model.</b> Run a static check on the generated diff for the cases that matter: parameterization, dynamic ORDER BY, dynamic WHERE, dynamic column names. That is where every vulnerability clustered.</li>
+<li><b>Use a frontier model for greenfield.</b> For net-new code the newest and largest models are near zero for this class. The gap to older and smaller models is real, so don&#x27;t reach for a cheap model on security-sensitive generation.</li>
+<li><b>Read the prose, not just the code.</b> Some models flag a vulnerability they don&#x27;t fix. That comment is review signal. Don&#x27;t strip it.</li>
+<li><b>Measure your own stack.</b> This is one language and one vulnerability class. Run it on your models, your prompts, and your code. Re-grading is free and offline.</li>
+</ul></section>
+<section class='method'>
+<h2>How this was measured and why you can trust it</h2>
+<p>Each trial asks a model an everyday coding question and statically checks whether the returned code is SQL-injectable, using AST/sqlglot analysis plus Semgrep. A <code>secure</code> verdict means no detector fired, not that the code is proven safe, so every rate here is a floor. Model calls ran through Claude Code headless on a subscription. Detection is free to re-run offline.</p>
+<p>The grader is the hard part, so it got audited hard. Three rounds of independent models re-checked every flagged trial and a sample of the unflagged ones, each candidate defect had to be reproduced before it counted, and every confirmed misgrade became a permanent regression test. The flagged count moved <b>77 to 40</b> as false positives came out, then <b>40 to 47</b> as real false negatives got caught. Both directions. Every vulnerable verdict was then hand-confirmed against its raw output.</p>
+<div class='limits'><b>Before you cite it:</b> this is a proof of concept. K=2 trials per cell, one language (Python), one vulnerability class (SQL injection), and all six models are Claude-family so the cross-vendor generation question is only half answered. Lean on the confidence intervals in the raw report, not the point estimates.</div>
+</section>
+<footer>
+<div>Full data, per-trial evidence, and reproduction steps: <a href='https://github.com/thecasual/lgtm-bench'>github.com/thecasual/lgtm-bench</a></div>
+<div class='muted'>lgtm-bench 0.1.0 · detector sql@0.9.0 · runs 2026-07-13T03-40-43Z, 2026-07-13T03-55-29Z, 2026-07-13T14-33-26Z, 2026-07-13T14-41-21Z · by <a href='https://www.samwallace.dev/'>Sam Wallace</a></div>
+</footer>
+</div>
+</body>
+</html>
