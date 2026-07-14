@@ -255,7 +255,7 @@ def build_html_report(records: list[dict], tasks: list[TaskSpec]) -> str:
     # Cross-language (only when go/rust data is present)
     if other_langs:
         a("<section>")
-        a("<h2><span class='num'>01b</span> The pattern holds across languages</h2>")
+        a("<h2><span class='num'>01b</span> Cross-language: the detector isn't ready yet</h2>")
         a("<p>The same everyday tasks, ported to " + _e(" and ".join(other_langs)) +
           ". New-code injection rates pooled across models, by language:</p>")
         pooled_rows = [(lang, 100 * xlang_pooled[lang].p,
@@ -264,11 +264,17 @@ def build_html_report(records: list[dict], tasks: list[TaskSpec]) -> str:
         a("<div class='card'>")
         a("<div class='cardhead'>Injection rate in new code, by language (pooled)</div>")
         a(_bar_chart(pooled_rows, color_key=sev_color, label_w=120))
-        a("<p class='fig-note'>Read the non-Python bars loosely. The Python grader is an "
-          "AST analysis hardened over nine versions and a three-round audit; the Go and "
-          "Rust packs are Semgrep-rule v0.1 (pattern-based, no taint analysis), so they "
-          "miss more and can false-positive on allowlist-then-concat. First look, not a "
-          "settled ranking.</p>")
+        a("<p class='fig-note'><strong>These non-Python rates are inflated and are not a "
+          "measurement yet.</strong> The Python grader is an AST/scope analysis hardened over "
+          "nine versions and a three-round audit. The Go and Rust packs are Semgrep-rule v0.1, "
+          "pattern-based with no taint analysis, and a spot-audit of the flagged Go trials found "
+          "a majority are false positives on safe code: <code>fmt.Sprintf</code> building a "
+          "<code>?</code>-placeholder list passed as <code>args...</code>, and allowlisted "
+          "<code>ORDER BY</code> where the column comes from a map or switch. Pattern matching "
+          "can't see that validation; the Python detector can. So the true Go/Rust rates are "
+          "substantially lower than the bars show and are probably much closer to Python. Read "
+          "this as \"the detector needs taint analysis before these numbers mean anything,\" not "
+          "\"models are 4x worse in Go.\"</p>")
         a("</div></section>")
 
     # Finding 2: task shape

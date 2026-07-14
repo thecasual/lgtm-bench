@@ -95,10 +95,12 @@ def _bottom_line(add, records, hints, cats, models, records_all=None, langs=None
         pooled = M.vir_by_language(records_all, hints, condition="none")
         bits = ", ".join(f"{l} {100*pooled[l].p:.0f}%" for l in langs if l in pooled)
         bullets.append(
-            f"**The pattern holds across languages, roughly.** New-code "
-            f"injection rates pooled across models: {bits}. Read the non-Python "
-            f"numbers loosely (Semgrep v0.1 packs, not the hardened Python "
-            f"grader). See **Cross-language**.")
+            f"**Go and Rust aren't measured yet, only attempted.** Pooled "
+            f"new-code rates read {bits}, but the non-Python packs are Semgrep "
+            f"v0.1 with no taint analysis and a spot-audit found most flagged Go "
+            f"trials are false positives on safe code. The real Go/Rust rates "
+            f"are almost certainly much closer to Python; don't quote these. See "
+            f"**Cross-language**.")
 
     lang_clause = ("one language" if len(langs) == 1
                    else f"{len(langs)} languages, only Python fully hardened")
@@ -216,13 +218,21 @@ def build_report(records: list[dict], tasks: list[TaskSpec]) -> str:
     if other_langs:
         add("## Cross-language: SQL injection in new code\n")
         add("The same everyday tasks, ported to other languages, condition "
-            "`none`, new code. This is the one place Go and Rust appear. "
-            "**Read it more loosely than the Python numbers:** the Python "
-            "grader is an AST/scope analysis hardened over nine versions and a "
-            "three-round audit, while the Go and Rust packs are Semgrep-rule "
-            "v0.1 (pattern-based, no taint analysis), so they miss more and can "
-            "false-positive on allowlist-then-concat. Treat these as a first "
-            "look, not a settled ranking.\n")
+            "`none`, new code. This is the one place Go and Rust appear.\n")
+        add("**These rates are inflated and are not a measurement yet.** The "
+            "Python grader is an AST/scope analysis hardened over nine versions "
+            "and a three-round audit. The Go and Rust packs are Semgrep-rule "
+            "v0.1, pattern-based with no taint analysis, and a spot-audit of "
+            "the flagged Go trials found a majority are **false positives on "
+            "safe code**: `fmt.Sprintf` building a `?`-placeholder list with "
+            "values passed as `args...`, and allowlisted `ORDER BY` where the "
+            "column comes from a map or switch. Pattern matching can't see that "
+            "validation; the Python detector can. So the true Go/Rust rates are "
+            "substantially lower than the table shows and are probably much "
+            "closer to Python. Read this as \"the detector needs taint analysis "
+            "before these numbers mean anything,\" not \"models are 4x worse in "
+            "Go.\" The honest cross-language signal so far: *plausibly* somewhat "
+            "less reliable outside Python, magnitude unknown.\n")
         xlang = M.vir_by_model_language(records_all, hints, condition="none")
         all_models = sorted({r["model"] for r in records_all})
         rows = []

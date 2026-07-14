@@ -74,6 +74,25 @@ lgtm run --models claude-sonnet-5 --conditions none \
 ./scripts/run_poc.sh
 ```
 
+### Open-source models (Ollama) and other languages
+
+Claude models ride the subscription. Open-weight models run through an Ollama host you
+point at with `INFERENCE_HOST` (`user@host`, `host`, `host:port`, or a full URL):
+
+```bash
+INFERENCE_HOST=you@your-box.ts.net \
+lgtm run --runner ollama --models llama3.2:3b,qwen3:8b --conditions none --trials 2 --out results
+# reasoning/verbose models: --no-think --max-tokens 400 cut wasted tokens hard
+```
+
+The Ollama runner is `--conditions none` only (a raw model API has no filesystem, so it
+can't work inside a repo). Beyond Python, there are Go and Rust SQL task packs
+(`--task-filter sql-go` / `sql-rust`). The Go/Rust detectors are Semgrep-rule v0.1 and
+pattern-based (no taint analysis yet), so treat their rates as directional, not settled —
+[docs/poc-report.md](docs/poc-report.md) says exactly why. Adding a model or a language never
+requires regenerating existing results; the report is a pure function of the JSONL. Full
+runbook: [docs/EXTENDING.md](docs/EXTENDING.md).
+
 Runs are **resumable**: re-running the same command skips completed trials (results append
 to `results/run-<config-hash>.jsonl`). Useful flags: `--concurrency N` (default 2),
 `--timeout S` per trial, `--runner mock` for an offline dry run of the whole pipeline.
@@ -104,5 +123,6 @@ ground truth is under `results-published/`.
 
 ## Status
 
-Harness implemented through M1–M4 plus the M5 edit-task/remediation slice, SQL vertical
-only. Milestones and remaining scope (new categories, raw-API runners) are in the spec.
+Harness implemented through M1-M4 plus the M5 edit-task/remediation slice. Python SQL is the
+mature vertical; Go/Rust SQL packs and an Ollama runner for open-weight models are in as v0.1.
+Milestones and remaining scope (new categories, taint-aware Go/Rust detectors) are in the spec.
