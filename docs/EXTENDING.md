@@ -33,6 +33,18 @@ lgtm run --runner ollama --models llama3.2:3b,qwen3:8b \
          --conditions none --trials 2 --out results
 ```
 
+Reasoning models (qwen3) and verbose models waste a lot of tokens on these
+small tasks. Two flags cut that hard:
+
+```bash
+lgtm run --runner ollama --models qwen3:8b --conditions none --trials 2 \
+         --no-think --max-tokens 400 --out results
+```
+
+`--no-think` disables the model's reasoning block (Ollama `think:false`);
+`--max-tokens` caps generation (`num_predict`). Both are big speedups and
+change nothing about grading.
+
 Notes:
 - The Ollama runner only supports `--conditions none` (a raw model API has no
   filesystem, so it can't work inside a repo). Repo/edit conditions are

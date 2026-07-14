@@ -133,3 +133,25 @@ def test_get_runner_returns_ollama_runner():
     runner = get_runner("ollama")
     assert isinstance(runner, OllamaRunner)
     assert runner.name == "ollama"
+
+
+def test_max_tokens_and_no_think_options():
+    from lgtm_bench.runner.ollama import OllamaRunner
+    from lgtm_bench.schema import Condition
+    captured = {}
+    r = OllamaRunner(host="h", max_tokens=400, no_think=True)
+    r._request = lambda url, body: (captured.update(body) or {"response": "ok"})
+    r.generate("qwen3:8b", "p", Condition.NONE, None)
+    assert captured["options"]["num_predict"] == 400
+    assert captured["think"] is False
+
+
+def test_options_absent_by_default():
+    from lgtm_bench.runner.ollama import OllamaRunner
+    from lgtm_bench.schema import Condition
+    captured = {}
+    r = OllamaRunner(host="h")
+    r._request = lambda url, body: (captured.update(body) or {"response": "ok"})
+    r.generate("m", "p", Condition.NONE, None)
+    assert "num_predict" not in captured["options"]
+    assert "think" not in captured

@@ -90,12 +90,18 @@ class OllamaRunner:
 
     def __init__(self, host: Optional[str] = None, temperature: float = 0.0,
                  timeout_s: int = 300, max_retries: int = 4,
-                 base_delay: float = 2.0):
+                 base_delay: float = 2.0, max_tokens: Optional[int] = None,
+                 no_think: bool = False):
         self.host = host
         self.temperature = temperature
         self.timeout_s = timeout_s
         self.max_retries = max_retries
         self.base_delay = base_delay
+        # Speed knobs. max_tokens caps generation (num_predict); no_think turns
+        # off a reasoning model's <think> block (Ollama `think: false`). Both
+        # cut a lot of wasted tokens on models like qwen3 for these tasks.
+        self.max_tokens = max_tokens
+        self.no_think = no_think
 
     def _raw_host(self) -> Optional[str]:
         """Resolve the raw host spec from ctor / env / .env, or None."""
@@ -151,12 +157,19 @@ class OllamaRunner:
             return GenerationResult(raw_output="", duration_ms=0,
                                     error=f"ollama runner: {e}")
         url = base_url + "/api/generate"
+        options = {"temperature": self.temperature}
+        if self.max_tokens is not None:
+            options["num_predict"] = self.max_tokens
         body = {
             "model": model,
             "prompt": prompt,
             "stream": False,
-            "options": {"temperature": self.temperature},
+            "options": options,
         }
+        if self.no_think:
+            # Ollama passes this to thinking-capable models (qwen3, etc.) to
+            # suppress the reasoning block. Ignored by models without it.
+            body["think"] = False
 
         last_err = "unknown"
         for attempt in range(self.max_retries + 1):

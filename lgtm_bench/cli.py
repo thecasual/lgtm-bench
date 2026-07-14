@@ -26,12 +26,18 @@ def run(
     trials: int = typer.Option(5, help="trials per variant (K)"),
     conditions: str = typer.Option("none,clean-repo,dirty-repo"),
     out: Path = typer.Option(Path("results")),
-    runner: str = typer.Option("claude-code", help="claude-code | mock"),
+    runner: str = typer.Option("claude-code", help="claude-code | ollama | mock"),
     concurrency: int = typer.Option(2),
     variants: Optional[str] = typer.Option(None, help="variant id filter (csv)"),
     task_filter: Optional[str] = typer.Option(None, help="csv of task-id substrings (OR)"),
     timeout: int = typer.Option(300, help="per-trial timeout (s)"),
     fixtures: Path = typer.Option(Path("fixtures")),
+    max_tokens: Optional[int] = typer.Option(
+        None, "--max-tokens", help="cap generated tokens (ollama num_predict); "
+        "big speedup for verbose models, e.g. 400"),
+    no_think: bool = typer.Option(
+        False, "--no-think", help="disable a reasoning model's think block "
+        "(ollama think:false); big speedup for qwen3 etc."),
 ):
     cfg = RunConfig(
         models=_csv(models), tasks_root=tasks, out_dir=out,
@@ -40,6 +46,7 @@ def run(
         variant_filter=_csv(variants) if variants else None,
         task_filter=_csv(task_filter) if task_filter else None,
         timeout_s=timeout, fixtures_root=fixtures,
+        max_tokens=max_tokens, no_think=no_think,
         lexicon_dir=Path("rules/lexicons") if Path("rules/lexicons").exists() else None,
     )
     out_path = execute_run(cfg)

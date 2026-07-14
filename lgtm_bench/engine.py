@@ -63,6 +63,8 @@ class RunConfig:
     run_id: str = ""
     fixtures_root: Path = Path("fixtures")
     lexicon_dir: Optional[Path] = None
+    max_tokens: Optional[int] = None   # ollama num_predict cap
+    no_think: bool = False             # ollama think:false (reasoning models)
 
 
 @dataclass
@@ -173,6 +175,10 @@ def execute_run(cfg: RunConfig) -> Path:
     runner = get_runner(cfg.runner_name)
     if hasattr(runner, "timeout_s"):
         runner.timeout_s = cfg.timeout_s
+    if cfg.max_tokens is not None and hasattr(runner, "max_tokens"):
+        runner.max_tokens = cfg.max_tokens
+    if cfg.no_think and hasattr(runner, "no_think"):
+        runner.no_think = True
     fixture_version = _fixture_version(cfg)
 
     completed = 0
