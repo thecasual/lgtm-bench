@@ -33,6 +33,19 @@ FIXTURES = {
     Condition.DIRTY: "flaskapp-dirty",
 }
 
+# Repo-condition fixtures are language-specific. A task in language X under a
+# clean/dirty condition uses fixtures/<mapped>; python keeps the flaskapp
+# fixtures unchanged.
+FIXTURES_BY_LANG = {
+    "python": {Condition.CLEAN: "flaskapp-clean", Condition.DIRTY: "flaskapp-dirty"},
+    "go": {Condition.CLEAN: "go-clean", Condition.DIRTY: "go-dirty"},
+    "rust": {Condition.CLEAN: "rust-clean", Condition.DIRTY: "rust-dirty"},
+}
+
+
+def _fixture_name(language: str, condition: Condition) -> str:
+    return FIXTURES_BY_LANG.get(language, FIXTURES_BY_LANG["python"])[condition]
+
 
 @dataclass
 class RunConfig:
@@ -93,7 +106,7 @@ def _prepare_workdir(spec: TrialSpec, cfg: RunConfig) -> Path:
     base = Path(tempfile.mkdtemp(prefix="lgtm-trial-"))
     if spec.condition == Condition.NONE:
         return base
-    fixture = cfg.fixtures_root / FIXTURES[spec.condition]
+    fixture = cfg.fixtures_root / _fixture_name(spec.task.language, spec.condition)
     if not fixture.exists():
         raise FileNotFoundError(f"fixture repo missing: {fixture}")
     dest = base / "repo"
@@ -119,7 +132,8 @@ def run_trial(spec: TrialSpec, cfg: RunConfig, runner, fixture_version) -> Trial
         from .schema import Verdict
         return TrialRecord(
             trial_key=spec.key, run_id=cfg.run_id, model=spec.model,
-            task_id=spec.task.id, mode=spec.task.mode, condition=spec.condition,
+            task_id=spec.task.id, mode=spec.task.mode,
+            language=spec.task.language, condition=spec.condition,
             variant_id=spec.variant.id, trial_index=spec.trial_index,
             prompt=prompt, raw_output="", extracted_code="",
             verdict=Verdict.INVALID, error=gen.error,
@@ -129,7 +143,8 @@ def run_trial(spec: TrialSpec, cfg: RunConfig, runner, fixture_version) -> Trial
     g = grade(spec.task, gen.raw_output, spec.condition, cfg.lexicon_dir)
     return TrialRecord(
         trial_key=spec.key, run_id=cfg.run_id, model=spec.model,
-        task_id=spec.task.id, mode=spec.task.mode, condition=spec.condition,
+        task_id=spec.task.id, mode=spec.task.mode,
+        language=spec.task.language, condition=spec.condition,
         variant_id=spec.variant.id, trial_index=spec.trial_index,
         prompt=prompt, raw_output=gen.raw_output, extracted_code=g.extracted_code,
         verdict=g.verdict, findings=g.findings,
@@ -173,7 +188,8 @@ def execute_run(cfg: RunConfig) -> Path:
                 record = TrialRecord(
                     trial_key=spec.key, run_id=cfg.run_id, model=spec.model,
                     task_id=spec.task.id, mode=spec.task.mode,
-                    condition=spec.condition, variant_id=spec.variant.id,
+                    language=spec.task.language, condition=spec.condition,
+                    variant_id=spec.variant.id,
                     trial_index=spec.trial_index, prompt="", raw_output="",
                     extracted_code="", verdict=Verdict.INVALID,
                     error=f"harness: {e!r}", harness_version=HARNESS_VERSION,

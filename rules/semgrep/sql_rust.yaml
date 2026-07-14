@@ -1,0 +1,41 @@
+rules:
+  - id: sql.rust.format-into-execute
+    languages: [rust]
+    severity: ERROR
+    message: "format! builds a SQL query passed to execute()/query()"
+    pattern-either:
+      - pattern: $C.execute(format!(...), ...)
+      - pattern: $C.execute(&format!(...), ...)
+      - pattern: sqlx::query(format!(...))
+      - pattern: sqlx::query(&format!(...))
+      - pattern: sqlx::query($POOL, format!(...))
+      - pattern: |
+          let $Q = format!(...);
+          ...
+          $C.execute(&$Q, ...);
+      - pattern: |
+          let $Q = format!(...);
+          ...
+          $C.execute($Q, ...);
+      - pattern: |
+          let $Q = format!(...);
+          ...
+          sqlx::query(&$Q)
+      - pattern: |
+          let $Q = format!(...);
+          ...
+          sqlx::query($Q)
+
+  - id: sql.rust.concat-into-execute
+    languages: [rust]
+    severity: ERROR
+    message: "string concatenation builds a SQL query passed to execute()"
+    pattern-either:
+      - pattern: $C.execute(&($A + &$B), ...)
+      - pattern: $C.execute($A + &$B, ...)
+      - pattern: |
+          let mut $Q = String::from("...");
+          ...
+          $Q.push_str(&$X);
+          ...
+          $C.execute(&$Q, ...);

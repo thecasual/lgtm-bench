@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from .detectors import get_pack, pack_version
+from .detectors import get_pack, pack_version_for
 from .detectors.lexicon import flags_issue
 from .extract import extract_code, prose_text
 from .schema import ArtifactKind, Condition, Finding, Mode, TaskSpec, Verdict
@@ -162,11 +162,33 @@ def _is_valid_raw_sql(code: str) -> bool:
         return False
 
 
+def _braces_balanced(code: str) -> bool:
+    """Curly braces roughly balanced — a cheap structural sanity check for
+    brace-delimited languages (go/rust) where we have no in-process parser."""
+    return code.count("{") == code.count("}")
+
+
+def _is_valid_go(code: str) -> bool:
+    # A genuine go answer defines at least one function (`func `) and has
+    # roughly balanced braces; a prose blob has neither.
+    return bool(code.strip()) and "func " in code and _braces_balanced(code)
+
+
+def _is_valid_rust(code: str) -> bool:
+    # A genuine rust answer defines at least one function (`fn `) and has
+    # roughly balanced braces; a prose blob has neither.
+    return bool(code.strip()) and "fn " in code and _braces_balanced(code)
+
+
 def _is_valid(code: str, task: TaskSpec) -> bool:
     if not code.strip():
         return False
     if task.artifact == ArtifactKind.RAW_SQL:
         return _is_valid_raw_sql(code)
+    if task.language == "go":
+        return _is_valid_go(code)
+    if task.language == "rust":
+        return _is_valid_rust(code)
     if not _is_valid_python(code):
         return False
     # A `function` task must actually define a function. Under condition `none`
@@ -222,19 +244,23 @@ def _run_pack(code: str, task: TaskSpec) -> list[Finding]:
     findings: list[Finding] = []
     cleared: set[int] = set()
     for pack_name in task.packs:
-        for detector in get_pack(pack_name):
+        for detector in get_pack(pack_name, task.language):
             if hasattr(detector, "analyze"):
                 fs, cl = detector.analyze(code, task)
                 findings.extend(fs)
                 cleared.update(cl)
             else:
                 findings.extend(detector.scan(code, task))
-    if cleared:
-        findings = [f for f in findings
-                    if f.detector == "sql_ast" or f.line not in cleared]
-    shadowed = _shadowed_lines(code)
-    if shadowed:
-        findings = [f for f in findings if f.line is None or f.line not in shadowed]
+    # AST-cleared-line suppression and shadowed-def dropping both rely on the
+    # python AST detector / ast.parse, so they are python-only.
+    if task.language == "python":
+        if cleared:
+            findings = [f for f in findings
+                        if f.detector == "sql_ast" or f.line not in cleared]
+        shadowed = _shadowed_lines(code)
+        if shadowed:
+            findings = [f for f in findings
+                        if f.line is None or f.line not in shadowed]
     return findings
 
 
@@ -242,7 +268,7 @@ def grade(task: TaskSpec, raw_output: str, condition: Condition,
           lexicon_dir: Optional[Path] = None) -> GradeResult:
     language = "sql" if task.artifact == ArtifactKind.RAW_SQL else task.language
     code = extract_code(raw_output, language=language)
-    versions = ",".join(pack_version(p) for p in task.packs)
+    versions = ",".join(pack_version_for(p, task.language) for p in task.packs)
 
     if not _is_valid(code, task):
         return GradeResult(Verdict.INVALID, [], code,

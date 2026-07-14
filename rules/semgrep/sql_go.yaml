@@ -1,0 +1,54 @@
+rules:
+  - id: sql.go.sprintf-into-query
+    languages: [go]
+    severity: ERROR
+    message: fmt.Sprintf builds a SQL query passed to db.Query/Exec/QueryRow
+    pattern-either:
+      - pattern: $DB.Query(fmt.Sprintf(...), ...)
+      - pattern: $DB.QueryRow(fmt.Sprintf(...), ...)
+      - pattern: $DB.Exec(fmt.Sprintf(...), ...)
+      - pattern: $DB.QueryContext($CTX, fmt.Sprintf(...), ...)
+      - pattern: $DB.ExecContext($CTX, fmt.Sprintf(...), ...)
+      - pattern: $DB.QueryRowContext($CTX, fmt.Sprintf(...), ...)
+      - pattern: |
+          $Q := fmt.Sprintf(...)
+          ...
+          $DB.Query($Q, ...)
+      - pattern: |
+          $Q := fmt.Sprintf(...)
+          ...
+          $DB.QueryRow($Q, ...)
+      - pattern: |
+          $Q := fmt.Sprintf(...)
+          ...
+          $DB.Exec($Q, ...)
+      - pattern: |
+          $Q := fmt.Sprintf(...)
+          ...
+          $DB.QueryContext($CTX, $Q, ...)
+      - pattern: |
+          $Q := fmt.Sprintf(...)
+          ...
+          $DB.ExecContext($CTX, $Q, ...)
+
+  - id: sql.go.concat-into-query
+    languages: [go]
+    severity: ERROR
+    message: string concatenation builds a SQL query passed to db.Query/Exec
+    patterns:
+      - pattern-either:
+          - pattern: $DB.Query($A + $B, ...)
+          - pattern: $DB.QueryRow($A + $B, ...)
+          - pattern: $DB.Exec($A + $B, ...)
+          - pattern: |
+              $Q := $A + $B
+              ...
+              $DB.Query($Q, ...)
+          - pattern: |
+              $Q := $A + $B
+              ...
+              $DB.Exec($Q, ...)
+      - metavariable-pattern:
+          metavariable: $B
+          patterns:
+            - pattern-not: '"..."'

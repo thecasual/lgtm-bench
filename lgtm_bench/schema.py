@@ -103,6 +103,7 @@ class TrialRecord(BaseModel):
     model: str
     task_id: str
     mode: Mode
+    language: str = "python"
     condition: Condition
     variant_id: str
     trial_index: int

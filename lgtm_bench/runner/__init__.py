@@ -11,4 +11,7 @@ def get_runner(name: str) -> ModelRunner:
     if name == "mock":
         from .mock import MockRunner
         return MockRunner()
+    if name == "ollama":
+        from .ollama import OllamaRunner
+        return OllamaRunner()
     raise KeyError(f"unknown runner: {name}")

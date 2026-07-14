@@ -34,6 +34,8 @@ _CODE_START_RE = re.compile(
 _LANG_ALIASES = {
     "python": {"python", "py", "python3"},
     "sql": {"sql", "sqlite", "postgres", "postgresql", "mysql"},
+    "go": {"go", "golang"},
+    "rust": {"rust", "rs"},
 }
 
 
@@ -57,13 +59,19 @@ def _try_parse_block(block: list[str]) -> str | None:
     return None
 
 
-def _largest_parseable_span(raw: str) -> str | None:
+def _largest_parseable_span(raw: str, language: str = "python") -> str | None:
     """Largest contiguous code span starting at a top-level code line.
 
     Last-resort heuristic for fenceless, markup-free completions that drop
     source directly into prose. Anchors on an import/from/def/class or an
     ALLCAPS assignment, trims trailing prose lines until the span parses.
+
+    This heuristic relies on `ast.parse`, so it is python-only; for other
+    languages there is no parser to trim against, so we skip it and let the
+    caller fall through to the whole-output fallback.
     """
+    if language != "python":
+        return None
     lines = raw.splitlines()
     starts = [i for i, ln in enumerate(lines) if _CODE_START_RE.match(ln.strip())]
     best: str | None = None
@@ -135,7 +143,7 @@ def extract_code(raw: str, language: str = "python") -> str:
         return tool_code
 
     # Last resort: the largest parseable span buried in running prose.
-    span = _largest_parseable_span(raw)
+    span = _largest_parseable_span(raw, language)
     if span is not None:
         return span
 

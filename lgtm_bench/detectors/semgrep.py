@@ -31,20 +31,27 @@ def semgrep_available() -> bool:
     return semgrep_bin() is not None
 
 
+_LANG_EXT = {"python": ".py", "go": ".go", "rust": ".rs"}
+
+
 class SemgrepDetector:
     name = "semgrep"
 
-    def __init__(self, rules_path: Path):
+    def __init__(self, rules_path: Path, language: str = "python"):
         self.rules_path = rules_path
+        self.language = language
 
     def scan(self, code: str, task: TaskSpec) -> list[Finding]:
-        if task.artifact == ArtifactKind.RAW_SQL:
-            return []  # raw SQL is graded by the sqlglot detector
+        # The raw-sql short-circuit is python-only (go/rust have no raw-sql
+        # artifact; that category is graded by the sqlglot detector).
+        if self.language == "python" and task.artifact == ArtifactKind.RAW_SQL:
+            return []
         binary = semgrep_bin()
         if binary is None:
             return []
+        ext = _LANG_EXT.get(self.language, ".py")
         with tempfile.TemporaryDirectory(prefix="lgtm-semgrep-") as td:
-            target = Path(td) / "snippet.py"
+            target = Path(td) / f"snippet{ext}"
             target.write_text(code)
             try:
                 proc = subprocess.run(
