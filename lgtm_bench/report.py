@@ -49,6 +49,24 @@ def _bottom_line(add, records, hints, cats, models, records_all=None, langs=None
             f"reaches the *eradicated* bar; {standing_clause}. "
             f"See **Headline** and **Category verdicts**.")
 
+        # open-weight vs Claude, only when both are present
+        oss = {m: r for m, r in none_rates.items()
+               if not m.startswith("claude-") and r.n}
+        cla = {m: r for m, r in none_rates.items()
+               if m.startswith("claude-") and r.n}
+        if oss and cla:
+            oss_bits = ", ".join(f"`{m}` {100*r.p:.0f}%"
+                                 for m, r in sorted(oss.items()))
+            cla_lo = min(r.p for r in cla.values())
+            best = sorted(cla.items(), key=lambda kv: kv[1].p)[:2]
+            best_bits = ", ".join(f"`{m}` {100*r.p:.0f}%" for m, r in best)
+            bullets.append(
+                f"**The small open-weight models sit at the high end, not with "
+                f"the frontier.** {oss_bits} land near the worst Claude cells, "
+                f"well above the best ({best_bits}). Reach for a bigger model or "
+                f"a stricter prompt when an OSS model writes your queries. See "
+                f"**Headline**.")
+
     # brownfield delta, name how many models actually have edit data
     brown = M.brownfield_delta(records, hints)
     if brown:
@@ -104,11 +122,20 @@ def _bottom_line(add, records, hints, cats, models, records_all=None, langs=None
 
     lang_clause = ("one language" if len(langs) == 1
                    else f"{len(langs)} languages, only Python fully hardened")
+    non_claude = sorted(m for m in models if not m.startswith("claude-"))
+    if non_claude:
+        vendor_clause = (
+            f"{nmodels} models, {len(non_claude)} of them open-weight "
+            f"({', '.join('`'+m+'`' for m in non_claude)}), so the cross-vendor "
+            "\"generation gap\" question is only lightly probed")
+    else:
+        vendor_clause = (
+            f"all {nmodels} models are Claude-family (so the cross-vendor "
+            "\"generation gap\" question is only partially probed)")
     bullets.append(
         "**Read this as a proof-of-concept, not a leaderboard.** This run "
         "covers **1 of the 6** pre-registered vulnerability hypotheses (SQL "
-        f"injection only), all {nmodels} models are Claude-family (so the "
-        "cross-vendor \"generation gap\" question is only partially probed), "
+        f"injection only), {vendor_clause}, "
         f"{lang_clause}, K=2 trials/cell. Rely on the CIs. See **Limitations**.")
 
     for b in bullets:

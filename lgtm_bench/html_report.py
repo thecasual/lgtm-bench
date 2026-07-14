@@ -382,11 +382,19 @@ def build_html_report(records: list[dict], tasks: list[TaskSpec]) -> str:
       f"positives came out, then <b>40 to {n_vuln}</b> as real false negatives got caught. "
       "Both directions. Every vulnerable verdict was then hand-confirmed against its raw "
       "output.</p>")
+    _all_models = sorted({r["model"] for r in records_all})
+    _oss = [m for m in _all_models if not m.startswith("claude-")]
+    if _oss:
+        _vendor = (f"{len(_all_models)} models with {len(_oss)} open-weight "
+                   f"({_e(', '.join(_oss))}), so the cross-vendor generation "
+                   "question is only lightly probed")
+    else:
+        _vendor = ("all " + str(len(_all_models)) + " models are Claude-family so "
+                   "the cross-vendor generation question is only half answered")
     a("<div class='limits'><b>Before you cite it:</b> this is a proof of concept. K=2 trials "
-      "per cell, one language (Python), one vulnerability class (SQL injection), and all six "
-      "models are Claude-family so the cross-vendor generation question is only half "
-      "answered. Lean on the confidence intervals in the raw report, not the point "
-      "estimates.</div>")
+      f"per cell, Python fully hardened (Go/Rust packs are v0.1), one vulnerability class "
+      f"(SQL injection), and {_vendor}. Lean on the confidence intervals in the raw report, "
+      "not the point estimates.</div>")
     a("</section>")
 
     # footer
