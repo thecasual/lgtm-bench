@@ -1,7 +1,10 @@
 # Published raw results
 
-Ground-truth per-trial records behind `docs/poc-report.md`, committed so the
-report can be independently audited. Normal runs write to `results/` (gitignored);
+Ground-truth per-trial records behind [`docs/poc-report.md`](../docs/poc-report.md),
+committed so the report can be independently audited. Start with the
+[report](../docs/poc-report.md) for findings, [`docs/METHODOLOGY.md`](../docs/METHODOLOGY.md)
+for how verdicts are decided and validated, and [`docs/REPRODUCE.md`](../docs/REPRODUCE.md)
+to rebuild everything from scratch. Normal runs write to `results/` (gitignored);
 these are a curated snapshot.
 
 **Provenance:** run this to print the exact date range, run ids, model list,
