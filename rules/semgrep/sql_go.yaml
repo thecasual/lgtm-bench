@@ -1,92 +1,149 @@
 rules:
   # ------------------------------------------------------------------
-  # fmt.Sprintf result flowing into a query/exec sink — directly or via
-  # an intermediate variable. Covers database/sql (*sql.DB, *sql.Tx,
-  # *sql.Conn), sqlx (Queryx/Get/Select/...), and GORM (Raw/Where/Order).
-  # The method allowlist is expressed with metavariable-regex so a single
-  # set of patterns covers every receiver shape.
+  # Shared taint-mode design (both rules below):
+  #
+  # SOURCES  - untrusted input: any `string`-typed function parameter (the
+  #            benchmark's samples are single functions, so a string param
+  #            is the entry point for caller-controlled data), plus the
+  #            common Go web-framework getters: r.URL.Query().Get(...),
+  #            mux.Vars(r)[...], gin c.Param(...)/c.Query(...), and
+  #            r.FormValue(...).
+  #
+  # SINKS    - the query-STRING argument (only, via focus-metavariable) of
+  #            database/sql Query/QueryRow/Exec (+Context variants) and
+  #            Prepare/PrepareContext, sqlx Queryx/QueryRowx/MustExec and
+  #            Get/Select (+Context variants, which take a dest pointer
+  #            before the query), and GORM Raw/Where/Having/Order. A
+  #            *sql.Stmt / sqlx.Stmt returned by Prepare(...) takes bound
+  #            values (not a query string) in its own Query/Exec calls, so
+  #            those call sites are excluded.
+  #
+  # SANITIZERS - the idioms that make interpolation safe even though the
+  #            value reaching the query text is derived from tainted input:
+  #              - `$MAP[$KEY]` (excluding mux.Vars(...)[...], which is a
+  #                *source*, not a lookup against a fixed allowlist): an
+  #                allowlist/allow-map lookup or `switch` assignment never
+  #                lets the tainted key itself reach the query text — only
+  #                one of the map's own literal values can.
+  #              - strconv.Atoi / strconv.ParseInt: round-tripping through
+  #                an integer strips any SQL syntax the string could carry.
+  #            (A `switch sortKey { case "x": query = "..." }` allowlist
+  #            needs no explicit sanitizer: the tainted variable is never
+  #            itself assigned into the query, so ordinary dataflow already
+  #            keeps it clean.)
+  #
+  # A generic `fmt.Sprintf(...)` propagator carries taint from any
+  # Sprintf argument to its result; plain `+` concatenation is already
+  # tracked by Semgrep's built-in dataflow, so no propagator is needed for
+  # it. This is why the rule below only needs to attach the Sprintf
+  # propagator to the first rule and can leave the second to fall back on
+  # default propagation - that difference is exactly what keeps the two
+  # rule ids (kept stable for downstream consumers) meaningfully distinct.
   # ------------------------------------------------------------------
+
   - id: sql.go.sprintf-into-query
     languages: [go]
     severity: ERROR
+    mode: taint
     message: >-
-      fmt.Sprintf builds a SQL query string that is passed to a query/exec
-      sink; interpolated values are not parameterized (SQL injection).
-    patterns:
-      - pattern-either:
-          - pattern: $DB.$M(fmt.Sprintf(...), ...)
-          - pattern: |
-              $Q := fmt.Sprintf(...)
+      fmt.Sprintf builds a SQL query string from untrusted input that is
+      passed to a query/exec sink; the interpolated value is not
+      parameterized (SQL injection).
+    pattern-sources: &sources
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  func $F(..., $PARAM string, ...) $RET { ... }
+              - pattern-inside: |
+                  func $F(..., $PARAM string, ...) { ... }
+          - pattern: $PARAM
+      - pattern: $R.URL.Query().Get(...)
+      - pattern: mux.Vars($R)[...]
+      - pattern: $C.Param(...)
+      - patterns:
+          - pattern: $C.Query(...)
+          - metavariable-regex:
+              metavariable: $C
+              regex: ^(c|ctx|ginCtx|ginC)$
+      - pattern: $R.FormValue(...)
+    pattern-sinks: &sinks
+      - patterns:
+          - pattern: $DB.$M($Q, ...)
+          - focus-metavariable: $Q
+          - metavariable-regex:
+              metavariable: $M
+              regex: ^(QueryRow|Exec|Queryx|QueryRowx|MustExec|Raw|Where|Having|Order|Prepare)$
+          - pattern-not-inside: &not-prepared-stmt-1
+              |
+              $DB, $ERR := $X.Prepare(...)
               ...
-              $DB.$M($Q, ...)
-          - pattern: |
-              $Q = fmt.Sprintf(...)
+          - pattern-not-inside: &not-prepared-stmt-2
+              |
+              $DB, $ERR = $X.Prepare(...)
               ...
-              $DB.$M($Q, ...)
-          - pattern: |
-              $Q := fmt.Sprintf(...)
-              ...
-              $DB.$M($CTX, $Q, ...)
-          - pattern: |
-              $Q = fmt.Sprintf(...)
-              ...
-              $DB.$M($CTX, $Q, ...)
-          - pattern: $DB.$M($CTX, fmt.Sprintf(...), ...)
-      - metavariable-regex:
-          metavariable: $M
-          regex: ^(Query|QueryRow|Exec|QueryContext|QueryRowContext|ExecContext|Queryx|QueryRowx|QueryxContext|Get|GetContext|Select|SelectContext|MustExec|Raw|Where|Having|Order|Prepare|PrepareContext)$
+      # Bare "Query": excludes the gin c.Query(key)/ctx.Query(key) getter,
+      # which is structurally identical (single receiver, method "Query")
+      # but is a *source*, not a sink.
+      - patterns:
+          - pattern: $DB.Query($Q, ...)
+          - focus-metavariable: $Q
+          - metavariable-regex:
+              metavariable: $DB
+              regex: ^(?!(c|ctx|ginCtx|ginC)$).+$
+          - pattern-not-inside: *not-prepared-stmt-1
+          - pattern-not-inside: *not-prepared-stmt-2
+      - patterns:
+          - pattern: $DB.$M($CTX, $Q, ...)
+          - focus-metavariable: $Q
+          - metavariable-regex:
+              metavariable: $M
+              regex: ^(QueryContext|QueryRowContext|ExecContext|QueryxContext|PrepareContext)$
+          - pattern-not-inside: *not-prepared-stmt-1
+          - pattern-not-inside: *not-prepared-stmt-2
+      # sqlx Get/Select take a dest pointer before the query string.
+      - patterns:
+          - pattern: $DB.$M($DEST, $Q, ...)
+          - focus-metavariable: $Q
+          - metavariable-regex:
+              metavariable: $M
+              regex: ^(Get|Select)$
+          - pattern-not-inside: *not-prepared-stmt-1
+          - pattern-not-inside: *not-prepared-stmt-2
+      - patterns:
+          - pattern: $DB.$M($CTX, $DEST, $Q, ...)
+          - focus-metavariable: $Q
+          - metavariable-regex:
+              metavariable: $M
+              regex: ^(GetContext|SelectContext)$
+          - pattern-not-inside: *not-prepared-stmt-1
+          - pattern-not-inside: *not-prepared-stmt-2
+    pattern-sanitizers: &sanitizers
+      - by-side-effect: false
+        patterns:
+          - pattern: $MAP[$KEY]
+          - pattern-not: mux.Vars(...)[...]
+      - by-side-effect: false
+        pattern: strconv.Atoi(...)
+      - by-side-effect: false
+        pattern: strconv.ParseInt(...)
+    pattern-propagators:
+      - pattern: fmt.Sprintf(...)
+        from: $FROM
+        to: $TO
 
-  # ------------------------------------------------------------------
-  # String concatenation building a query string into a sink. Fires on any
-  # `+` in the query-string position, except the two well-known SAFE
-  # builders that still use `+`: strconv.Itoa/FormatInt for an integer
-  # LIMIT/OFFSET, and strings.Join for an IN-list of `?` placeholders.
-  # ------------------------------------------------------------------
   - id: sql.go.concat-into-query
     languages: [go]
     severity: ERROR
+    mode: taint
     message: >-
-      string concatenation builds a SQL query string that is passed to a
-      query/exec sink; interpolated values are not parameterized (SQL
-      injection).
-    patterns:
-      - pattern-either:
-          - pattern: $DB.$M($A + $B, ...)
-          - pattern: $DB.$M($CTX, $A + $B, ...)
-          - pattern: |
-              $Q := $A + $B
-              ...
-              $DB.$M($Q, ...)
-          - pattern: |
-              $Q = $A + $B
-              ...
-              $DB.$M($Q, ...)
-          - pattern: |
-              $Q := $A + $B
-              ...
-              $DB.$M($CTX, $Q, ...)
-      - metavariable-regex:
-          metavariable: $M
-          regex: ^(Query|QueryRow|Exec|QueryContext|QueryRowContext|ExecContext|Queryx|QueryRowx|QueryxContext|Get|GetContext|Select|SelectContext|MustExec|Raw|Where|Having|Order|Prepare|PrepareContext)$
-      # ---- carve-outs for safe `+`-based query builders ----
-      # integer LIMIT/OFFSET via strconv (value cannot carry SQL syntax)
-      - pattern-not: $DB.$M("..." + strconv.Itoa(...), ...)
-      - pattern-not: $DB.$M("..." + strconv.FormatInt(...), ...)
-      - pattern-not: |
-          $Q := "..." + strconv.Itoa(...)
-          ...
-          $DB.$M($Q, ...)
-      - pattern-not: |
-          $Q := "..." + strconv.FormatInt(...)
-          ...
-          $DB.$M($Q, ...)
-      # IN-list of `?` placeholders assembled with strings.Join
-      - pattern-not: $DB.$M($X + strings.Join(...) + $Y, ...)
-      - pattern-not: |
-          $Q := $X + strings.Join(...) + $Y
-          ...
-          $DB.$M($Q, ...)
-      - pattern-not: |
-          $Q := $X + strings.Join(...) + $Y
-          ...
-          $DB.$M($CTX, $Q, ...)
+      string concatenation builds a SQL query string from untrusted input
+      that is passed to a query/exec sink; the interpolated value is not
+      parameterized (SQL injection).
+    pattern-sources: *sources
+    pattern-sinks: *sinks
+    pattern-sanitizers: *sanitizers
+    # No pattern-propagators here: plain `+` concatenation is already
+    # tracked by Semgrep's built-in taint dataflow, so leaving this rule
+    # without the fmt.Sprintf propagator is what keeps it firing only on
+    # concatenation-built queries (sql.go.sprintf-into-query covers the
+    # fmt.Sprintf case above).

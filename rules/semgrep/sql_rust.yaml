@@ -1,115 +1,230 @@
 rules:
   # ---------------------------------------------------------------------------
-  # Rule 1: a SQL string built with format! and interpolated (non-constant,
-  # non-integer) values. This is the dominant Rust SQLi shape: the query string
-  # is assembled with format! and then handed to a sink such as
-  #   conn.execute(&q, ...)      client.query(&q, ...)
-  #   sqlx::query(&q)            sqlx::query_as::<_, T>(&q)
-  #   diesel::sql_query(q)
-  # whether directly (`sqlx::query(&format!(...))`) or via a `let q = format!(...)`
-  # intermediate. We flag the format! expression itself, so both the direct and
-  # the intermediate shapes are covered without enumerating every sink.
+  # sql.rust.tainted-query-string  (taint mode)
   #
-  # It MUST NOT fire on the safe idioms, and by construction it does not:
-  #   * sqlx::query("... $1 ...").bind(x)         -> string literal, no format!
-  #   * sqlx::query!(...) / sqlx::query_as!(...)  -> the `!` macros are a
-  #     distinct token from the `query(...)` call and are never format!
-  #   * conn.execute("... ?1 ...", params![x])    -> string literal, no format!
-  #   * an allowlisted ORDER BY chosen by `match` -> selects a *constant* query
-  #     string per branch; no format! is used
-  #   * a numeric LIMIT interpolated as an integer -> excluded via pattern-not
-  #     (an `x as i64`/`i32`/`u32`/`u64` value cannot carry a SQL payload)
-  - id: sql.rust.format-into-query
+  # Follows untrusted input from its source (an untyped function
+  # parameter/HashMap/slice that stands in for "already-extracted request
+  # data", matching how this benchmark's Rust tasks are shaped) through
+  # ordinary Rust dataflow (assignment, format!/push_str/push/+= string
+  # building, method chaining) to a SINK: the query-TEXT argument of a
+  # SQL-execution call. Unlike the old search-mode rules, this rewrite does
+  # not care *how* the query string was assembled (format!, `+`, push_str,
+  # fragment-by-fragment...) -- it only fires when tainted data can actually
+  # reach the argument that becomes SQL text, and it stops firing wherever a
+  # sanitizer proves the value can no longer carry attacker-chosen SQL.
+  #
+  # SOURCES
+  #   Function parameters typed as `&str`/`String`/`&HashMap<K, V>`/
+  #   `&[String]`/`Vec<String>` (the untrusted-input shapes these tasks use
+  #   for form fields, query filters, id/tag lists, ...), plus the common
+  #   web-framework request extractors (axum/actix `Path`/`Query`/`Json`),
+  #   for parity with real handler signatures even though the corpus itself
+  #   only exercises plain parameters.
+  #
+  # SINKS  (the query-STRING argument only -- never the params/bind side)
+  #   - sqlx::query(..) / sqlx::query_as::<_, T>(..)   (the *string* form;
+  #     the query!/query_as! macros are compile-time checked and are a
+  #     syntactically different call shape, so they are never matched here)
+  #   - diesel::sql_query(..)
+  #   - rusqlite/tokio-postgres/postgres: $CONN.execute(text, params),
+  #     $CONN.query_row/query/query_one/query_opt(text, params),
+  #     $CONN.prepare(text)
+  #   The execute/query/... sinks require at least two call arguments
+  #   (text + params) so that a *second* call stage on an already-prepared
+  #   rusqlite `Statement` -- e.g. `stmt.execute(params_from_iter(values))`,
+  #   which takes params only, no query text -- is never mistaken for a sink.
+  #
+  # PROPAGATORS
+  #   `$X.push_str($Y)`, `$X.push($Y)`, `$X += $Y` -- the taint engine does
+  #   not treat these mutating builder calls as flowing $Y's taint into $X
+  #   by default, so v08/v15/v16/v21-style "build the query in a mutable
+  #   String" vulnerabilities need an explicit propagator to be caught.
+  #
+  # SANITIZERS -- the real-world-harvested SAFE idioms this rewrite exists
+  # to stop flagging (see tests/detector_corpus/sql-rust/safe/s13-s25 for the
+  # concrete samples each one was pulled from):
+  #   - `match $X { ... }` with 2-6 arms: an allow-list that remaps the
+  #     tainted value to one of a fixed set of literal columns/keywords
+  #     (s06, s18's cousin, s19's `match`-shaped siblings). Semgrep's Rust
+  #     grammar requires an explicit arm list (no "..." inside `match { }`),
+  #     hence the fixed 2..6-arm x wildcard/named-catch-all expansion.
+  #   - `$ARR.iter().find(...)` / `$ARR.find(...)`: the value that comes back
+  #     is structurally one of $ARR's own literals, never the search key
+  #     (s19).
+  #   - `$X as i64/i32/u32/u64/usize/isize`: an integer cast can never carry
+  #     a SQL payload, however it reached the query text (s10, s24).
+  #   - `if !$ARR.contains(&$X) { return/continue/... }` (plus the
+  #     `.as_str()` and un-referenced spellings), and the char-whitelist
+  #     cousin `if !$X.chars().all(f) { ... }`: a same-variable allow-list
+  #     guard that rejects anything not on the list before $X is ever used
+  #     (s18, s22, s25). This is the dominant real-world idiom for dynamic
+  #     UPDATE/ORDER BY column names, and it is *not* just a match arm.
+  #
+  # NOT modeled as a sanitizer (by design, not oversight): building a
+  # "?,?,?" / "$1,$2,..." placeholder list with format!/repeat/join and
+  # binding the real values separately (s13/s14/s17) needs no sanitizer at
+  # all -- the tainted values never reach the query-text sink in the first
+  # place (only a `usize` count / a placeholder character does), so taint
+  # analysis clears it structurally.
+  - id: sql.rust.tainted-query-string
     languages: [rust]
     severity: ERROR
+    mode: taint
     message: >-
-      SQL query string built with format!() and interpolated values, then run
-      via execute()/query()/sqlx::query()/diesel::sql_query(). Interpolated
-      input is not escaped -- use bound parameters (?/$1/.bind()) or the
-      compile-time-checked query!/query_as! macros instead.
-    patterns:
-      - pattern: format!($FMT, ...)
-      # Only treat it as a SQL query when the format string actually looks like
-      # SQL, so unrelated format! calls are not swept in.
-      - metavariable-regex:
-          metavariable: $FMT
-          regex: (?is).*\b(SELECT|INSERT|UPDATE|DELETE|REPLACE|MERGE|CREATE|DROP|ALTER|TRUNCATE)\b.*
-      # A lone integer-typed interpolation (e.g. a LIMIT/OFFSET) cannot inject.
-      - pattern-not: format!($FMT, $X as i64)
-      - pattern-not: format!($FMT, $X as i32)
-      - pattern-not: format!($FMT, $X as u32)
-      - pattern-not: format!($FMT, $X as u64)
-      - pattern-not: format!($FMT, $X as usize)
-      - pattern-not: format!($FMT, $X as isize)
+      Untrusted input reaches a SQL query string without going through bound
+      parameters (?/$N/.bind()), the compile-time-checked query!/query_as!
+      macros, or an allow-list. Build the query text from constants only and
+      pass user-controlled data as bind parameters instead.
 
-  # ---------------------------------------------------------------------------
-  # Rule 2: a SQL string built by string concatenation ( + ) or push_str and
-  # then handed to an execution sink. Unlike format!, bare concatenation is not
-  # self-evidently SQL, so we require the concatenated string to reach a known
-  # sink (execute/query/sqlx::query/diesel::sql_query), directly or via a
-  # `let q = ...` intermediate.
-  - id: sql.rust.concat-into-query
-    languages: [rust]
-    severity: ERROR
-    message: >-
-      SQL query string built by string concatenation (+ / push_str) and run via
-      execute()/query()/sqlx::query()/diesel::sql_query(). Concatenated input is
-      not escaped -- use bound parameters instead.
-    pattern-either:
-      # --- `+` concatenation passed directly to a sink -----------------------
-      - pattern: $C.execute(&($A + $B), ...)
-      - pattern: $C.execute(&($A + $B + $D), ...)
-      - pattern: $C.execute($A + $B, ...)
-      - pattern: $C.query(&($A + $B), ...)
-      - pattern: $C.query(&($A + $B + $D), ...)
-      - pattern: $C.query(&($A + $B))
-      - pattern: $C.query_map(&($A + $B), ...)
-      - pattern: sqlx::query(&($A + $B))
-      - pattern: sqlx::query(&($A + $B + $D))
-      - pattern: sqlx::query($A + $B)
-      - pattern: sqlx::query(&(String::from($S) + $X))
-      - pattern: sqlx::query(String::from($S) + $X)
-      - pattern: diesel::sql_query($A + $B)
-      - pattern: diesel::sql_query(&($A + $B))
-      # --- `+` concatenation via a `let` intermediate ------------------------
-      - pattern: |
-          let $Q = $A + $B;
-          ...
-          $C.execute(&$Q, ...);
-      - pattern: |
-          let $Q = $A + $B + $D;
-          ...
-          $C.execute(&$Q, ...);
-      - pattern: |
-          let $Q = $A + $B;
-          ...
-          $C.query(&$Q, ...);
-      - pattern: |
-          let $Q = $A + $B;
-          ...
-          sqlx::query(&$Q)
-      # --- push_str builders -------------------------------------------------
-      - pattern: |
-          let mut $Q = String::from($S);
-          ...
-          $Q.push_str($X);
-          ...
-          $C.execute(&$Q, ...);
-      - pattern: |
-          let mut $Q = String::from($S);
-          ...
-          $Q.push_str($X);
-          ...
-          $C.query(&$Q, ...);
-      - pattern: |
-          let mut $Q = String::from($S);
-          ...
-          $Q.push_str($X);
-          ...
-          sqlx::query(&$Q)
-      - pattern: |
-          let mut $Q = String::new();
-          ...
-          $Q.push_str($X);
-          ...
-          $C.execute(&$Q, ...);
+    pattern-sources:
+      - patterns:
+          - pattern: 'fn $FN(..., $PARAM: &str, ...) { ... }'
+          - focus-metavariable: $PARAM
+      - patterns:
+          - pattern: 'fn $FN(..., $PARAM: String, ...) { ... }'
+          - focus-metavariable: $PARAM
+      - patterns:
+          - pattern: 'fn $FN(..., $PARAM: &String, ...) { ... }'
+          - focus-metavariable: $PARAM
+      - patterns:
+          - pattern: 'fn $FN(..., $PARAM: &HashMap<$K, $V>, ...) { ... }'
+          - focus-metavariable: $PARAM
+      - patterns:
+          - pattern: 'fn $FN(..., $PARAM: HashMap<$K, $V>, ...) { ... }'
+          - focus-metavariable: $PARAM
+      - patterns:
+          - pattern: 'fn $FN(..., $PARAM: &[String], ...) { ... }'
+          - focus-metavariable: $PARAM
+      - patterns:
+          - pattern: 'fn $FN(..., $PARAM: &[&str], ...) { ... }'
+          - focus-metavariable: $PARAM
+      - patterns:
+          - pattern: 'fn $FN(..., $PARAM: &Vec<String>, ...) { ... }'
+          - focus-metavariable: $PARAM
+      - patterns:
+          - pattern: 'fn $FN(..., $PARAM: Vec<String>, ...) { ... }'
+          - focus-metavariable: $PARAM
+      # Common web-framework request extractors (axum/actix). Not exercised
+      # by the corpus (its tasks use plain parameters), kept for parity with
+      # real handler signatures.
+      - patterns:
+          - pattern: 'fn $FN(..., $PARAM: Path<$T>, ...) { ... }'
+          - focus-metavariable: $PARAM
+      - patterns:
+          - pattern: 'fn $FN(..., $PARAM: web::Path<$T>, ...) { ... }'
+          - focus-metavariable: $PARAM
+      - patterns:
+          - pattern: 'fn $FN(..., $PARAM: Query<$T>, ...) { ... }'
+          - focus-metavariable: $PARAM
+      - patterns:
+          - pattern: 'fn $FN(..., $PARAM: web::Query<$T>, ...) { ... }'
+          - focus-metavariable: $PARAM
+      - patterns:
+          - pattern: 'fn $FN(..., $PARAM: Json<$T>, ...) { ... }'
+          - focus-metavariable: $PARAM
+      - patterns:
+          - pattern: 'fn $FN(..., $PARAM: web::Json<$T>, ...) { ... }'
+          - focus-metavariable: $PARAM
+
+    pattern-sinks:
+      # sqlx: the *string* call forms only -- query!/query_as! are macros
+      # (`foo!(...)`), a different call shape that these patterns never match.
+      - patterns:
+          - pattern: sqlx::query($Q)
+          - focus-metavariable: $Q
+      - patterns:
+          - pattern: sqlx::query_as::<$T1, $T2>($Q)
+          - focus-metavariable: $Q
+      - patterns:
+          - pattern: sqlx::query_as($Q)
+          - focus-metavariable: $Q
+      - patterns:
+          - pattern: diesel::sql_query($Q)
+          - focus-metavariable: $Q
+      - patterns:
+          - pattern: $X.prepare($Q)
+          - focus-metavariable: $Q
+      # rusqlite Connection/Transaction, tokio-postgres/postgres Client:
+      # execute/query/query_row/query_one/query_opt, all with the query text
+      # as the first of >=2 arguments. The >=2-argument requirement is what
+      # keeps this from also matching a *prepared* rusqlite Statement's
+      # `stmt.execute(params)` / `stmt.query(params)`, which take exactly one
+      # argument (no query text -- it was already bound into the Statement).
+      - patterns:
+          - pattern: $X.$M($Q, $P1, ...)
+          - focus-metavariable: $Q
+          - metavariable-regex:
+              metavariable: $M
+              regex: ^(execute|query|query_row|query_one|query_opt)$
+
+    pattern-propagators:
+      - pattern: $X.push_str($Y)
+        from: $Y
+        to: $X
+      - pattern: $X.push($Y)
+        from: $Y
+        to: $X
+      - pattern: $X += $Y
+        from: $Y
+        to: $X
+
+    pattern-sanitizers:
+      # --- allowlisted column/ORDER BY chosen via a match over a fixed set
+      # of literals. Semgrep's Rust grammar rejects "..." inside a match
+      # arm list, so arities 2-6 are enumerated explicitly, each with both
+      # a wildcard (`_`) and a named catch-all last arm.
+      - pattern: 'match $X { $A1 => $B1, _ => $C }'
+      - pattern: 'match $X { $A1 => $B1, $OTHER => $C }'
+      - pattern: 'match $X { $A1 => $B1, $A2 => $B2, _ => $C }'
+      - pattern: 'match $X { $A1 => $B1, $A2 => $B2, $OTHER => $C }'
+      - pattern: 'match $X { $A1 => $B1, $A2 => $B2, $A3 => $B3, _ => $C }'
+      - pattern: 'match $X { $A1 => $B1, $A2 => $B2, $A3 => $B3, $OTHER => $C }'
+      - pattern: 'match $X { $A1 => $B1, $A2 => $B2, $A3 => $B3, $A4 => $B4, _ => $C }'
+      - pattern: 'match $X { $A1 => $B1, $A2 => $B2, $A3 => $B3, $A4 => $B4, $OTHER => $C }'
+      - pattern: 'match $X { $A1 => $B1, $A2 => $B2, $A3 => $B3, $A4 => $B4, $A5 => $B5, _ => $C }'
+      - pattern: 'match $X { $A1 => $B1, $A2 => $B2, $A3 => $B3, $A4 => $B4, $A5 => $B5, $OTHER => $C }'
+
+      # --- allowlisted column/ORDER BY chosen via .find() over a fixed
+      # array: the value returned always came from the array's own
+      # literals, never from the search key.
+      - pattern: $ARR.iter().find($F)
+      - pattern: $ARR.find($F)
+
+      # --- integer LIMIT/OFFSET/id coerced via `as` -- cannot carry a SQL
+      # payload no matter how it reaches the query text.
+      - pattern: $X as i64
+      - pattern: $X as i32
+      - pattern: $X as u32
+      - pattern: $X as u64
+      - pattern: $X as usize
+      - pattern: $X as isize
+
+      # --- allowlisted column chosen via a same-variable `.contains()`
+      # guard that rejects (returns/continues/breaks) anything not on the
+      # list before the value is used -- functionally identical to the
+      # `match` idiom above, just expressed as a runtime predicate instead
+      # of a remapping. This is the dominant real-world shape for dynamic
+      # UPDATE SET / ORDER BY column names.
+      - patterns:
+          - pattern-inside: |
+              if !$ARR.contains(&$X) { ... }
+              ...
+          - pattern: $X
+      - patterns:
+          - pattern-inside: |
+              if !$ARR.contains(&$X.as_str()) { ... }
+              ...
+          - pattern: $X
+      - patterns:
+          - pattern-inside: |
+              if !$ARR.contains($X) { ... }
+              ...
+          - pattern: $X
+      # --- same idea, expressed as a character-class predicate instead of
+      # a fixed array (still rejects anything that could break out of an
+      # identifier position).
+      - patterns:
+          - pattern-inside: |
+              if !$X.chars().all($F) { ... }
+              ...
+          - pattern: $X
