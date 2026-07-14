@@ -118,12 +118,22 @@ def _paired_chart(rows):
 def build_html_report(records: list[dict], tasks: list[TaskSpec]) -> str:
     hints = M.hint_map(tasks)
     cats = M.category_map(tasks)
+    records_all = list(records)
+    langs = M.languages_present(records_all)
+    # Findings are the mature Python vertical; go/rust get a cross-language
+    # block (they're Semgrep v0.1 and generate/condition-none only).
+    records = [r for r in records_all if M.record_language(r) == "python"]
     models = sorted({r["model"] for r in records})
-    n_total = len(records)
-    n_inv = sum(1 for r in records if r["verdict"] == "invalid")
+    n_total = len(records_all)
+    n_inv = sum(1 for r in records_all if r["verdict"] == "invalid")
     n_vuln = sum(1 for r in records if r["verdict"] == "vulnerable")
-    run_ids = sorted({r.get("run_id", "?") for r in records})
-    pack = sorted({r.get("detector_pack_version", "") for r in records if r.get("detector_pack_version")})
+    run_ids = sorted({r.get("run_id", "?") for r in records_all})
+    pack = sorted({r.get("detector_pack_version", "") for r in records_all if r.get("detector_pack_version")})
+
+    # cross-language rows (only rendered if go/rust present)
+    xlang = M.vir_by_model_language(records_all, hints, condition="none")
+    xlang_pooled = M.vir_by_language(records_all, hints, condition="none")
+    other_langs = [l for l in langs if l != "python"]
 
     # ---- compute the figures the narrative references ----
     none_vir = M.vir_by_model_condition(records, hints, mode="generate")
@@ -241,6 +251,25 @@ def build_html_report(records: list[dict], tasks: list[TaskSpec]) -> str:
     a("<p class='fig-note'>Static detection, so these are floors. Small n, so read the "
       "gradient, not the exact ordering.</p>")
     a("</div></section>")
+
+    # Cross-language (only when go/rust data is present)
+    if other_langs:
+        a("<section>")
+        a("<h2><span class='num'>01b</span> The pattern holds across languages</h2>")
+        a("<p>The same everyday tasks, ported to " + _e(" and ".join(other_langs)) +
+          ". New-code injection rates pooled across models, by language:</p>")
+        pooled_rows = [(lang, 100 * xlang_pooled[lang].p,
+                        f"n={xlang_pooled[lang].n}")
+                       for lang in langs if lang in xlang_pooled and xlang_pooled[lang].n]
+        a("<div class='card'>")
+        a("<div class='cardhead'>Injection rate in new code, by language (pooled)</div>")
+        a(_bar_chart(pooled_rows, color_key=sev_color, label_w=120))
+        a("<p class='fig-note'>Read the non-Python bars loosely. The Python grader is an "
+          "AST analysis hardened over nine versions and a three-round audit; the Go and "
+          "Rust packs are Semgrep-rule v0.1 (pattern-based, no taint analysis), so they "
+          "miss more and can false-positive on allowlist-then-concat. First look, not a "
+          "settled ranking.</p>")
+        a("</div></section>")
 
     # Finding 2: task shape
     a("<section>")
