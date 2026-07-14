@@ -27,10 +27,32 @@ rules:
   #                one of the map's own literal values can.
   #              - strconv.Atoi / strconv.ParseInt: round-tripping through
   #                an integer strips any SQL syntax the string could carry.
+  #              - len(...): the result is an integer count, so a value
+  #                derived only from len() (e.g. a $N positional-placeholder
+  #                index built from len(args) after a string param is folded
+  #                into the args slice) can never carry SQL syntax.
+  #              - allowlist MEMBERSHIP guards where the ORIGINAL tainted
+  #                string (not a mapped value) is what reaches the query
+  #                text: `if _, ok := $ALLOW[$X]; ok { ...use $X... }`,
+  #                `if $ALLOW[$X] { ...use $X... }`, the mirror-image
+  #                negative-branch-returns-early forms
+  #                (`if !$ALLOW[$X] { return/http.Error(...); return }`
+  #                followed later by `...use $X...`), a `switch $X { case
+  #                "a", "b": ...use $X... }` allowlist, and
+  #                `slices.Contains($ALLOW, $X)` (either branch polarity).
+  #                In every one of these shapes $X is constrained to one of
+  #                a fixed, literal set of safe values before it can reach
+  #                the query text, which is what makes the interpolation
+  #                safe even though $X itself (not a distinct mapped value)
+  #                is what gets concatenated.
   #            (A `switch sortKey { case "x": query = "..." }` allowlist
-  #            needs no explicit sanitizer: the tainted variable is never
-  #            itself assigned into the query, so ordinary dataflow already
-  #            keeps it clean.)
+  #            that assigns a *literal* into the query needs no explicit
+  #            sanitizer: the tainted variable is never itself assigned
+  #            into the query, so ordinary dataflow already keeps it clean.
+  #            The switch/slices.Contains sanitizers above are for the
+  #            different shape where the tainted variable itself - not a
+  #            fresh literal - is what gets concatenated inside the
+  #            guarded branch.)
   #
   # A generic `fmt.Sprintf(...)` propagator carries taint from any
   # Sprintf argument to its result; plain `+` concatenation is already
@@ -39,6 +61,16 @@ rules:
   # propagator to the first rule and can leave the second to fall back on
   # default propagation - that difference is exactly what keeps the two
   # rule ids (kept stable for downstream consumers) meaningfully distinct.
+  #
+  # SOURCES also include the KEYS yielded by ranging over a map-typed
+  # function parameter: `for $KEY, $VAL := range $PARAM` where $PARAM is a
+  # `map[string]...` parameter. These benchmark samples are single
+  # functions, so (mirroring the string-parameter source above) a map
+  # parameter is the entry point for caller-controlled data such as a
+  # decoded JSON filter/update payload or parsed form values; when the loop
+  # body interpolates the range KEY into a query as a column/table name
+  # (rather than binding it as a parameter value), that key is exactly as
+  # dangerous as an unvalidated string parameter would be.
   # ------------------------------------------------------------------
 
   - id: sql.go.sprintf-into-query
@@ -66,6 +98,21 @@ rules:
               metavariable: $C
               regex: ^(c|ctx|ginCtx|ginC)$
       - pattern: $R.FormValue(...)
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  func $F(..., $PARAM map[string]$T, ...) $RET { ... }
+              - pattern-inside: |
+                  func $F(..., $PARAM map[string]$T, ...) { ... }
+          - pattern: |
+              for $KEY, $VAL := range $PARAM { ... }
+          - focus-metavariable: $KEY
+      # Parsed form values ranged over directly (map[string][]string), not
+      # via a named map parameter.
+      - patterns:
+          - pattern: |
+              for $KEY, $VAL := range $R.Form { ... }
+          - focus-metavariable: $KEY
     pattern-sinks: &sinks
       - patterns:
           - pattern: $DB.$M($Q, ...)
@@ -126,6 +173,74 @@ rules:
         pattern: strconv.Atoi(...)
       - by-side-effect: false
         pattern: strconv.ParseInt(...)
+      # len(...) returns an int count, so a value derived only from len()
+      # can never carry SQL syntax — same rationale as the strconv integer
+      # sanitizers above. This covers the safe $N/positional-placeholder
+      # builder idiom where a string param folded into an args slice makes
+      # len(args) taint-derived, yet only an integer placeholder index (not
+      # the string content) ever reaches the query text.
+      - by-side-effect: false
+        pattern: len(...)
+      # Allowlist MEMBERSHIP guards where the tainted value itself (not a
+      # distinct mapped value) is what gets used: positive-branch forms,
+      # where the use is inside the "found" branch.
+      - by-side-effect: false
+        patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  if _, $OK := $ALLOW[$X]; $OK {
+                    ...
+                  }
+              - pattern-inside: |
+                  if $ALLOW[$X] {
+                    ...
+                  }
+          - pattern: $X
+      # Same idiom, negative-branch-returns-early forms: the guard exits
+      # (return / http.Error+return / panic / continue) when $X is *not*
+      # in the allowlist, so any use of $X after the guard is constrained
+      # to the allowlist too.
+      - by-side-effect: false
+        patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  if !$ALLOW[$X] {
+                    ...
+                  }
+                  ...
+              - pattern-inside: |
+                  if _, $OK := $ALLOW[$X]; !$OK {
+                    ...
+                  }
+                  ...
+          - pattern: $X
+      # `switch $X { case "a", "b": ...use $X... }` allowlist: unlike the
+      # `switch sortKey { case "x": query = "..." }` shape (already safe
+      # via ordinary dataflow, see design note above), here the tainted
+      # switch tag itself - not a fresh literal - is concatenated inside
+      # the matched case.
+      - by-side-effect: false
+        patterns:
+          - pattern-inside: |
+              switch $X {
+              case ...:
+                ...
+              }
+          - pattern: $X
+      # slices.Contains(...) allowlist, either branch polarity.
+      - by-side-effect: false
+        patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  if slices.Contains($ALLOW, $X) {
+                    ...
+                  }
+              - pattern-inside: |
+                  if !slices.Contains($ALLOW, $X) {
+                    ...
+                  }
+                  ...
+          - pattern: $X
     pattern-propagators:
       - pattern: fmt.Sprintf(...)
         from: $FROM

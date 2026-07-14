@@ -66,6 +66,41 @@ rules:
   # all -- the tainted values never reach the query-text sink in the first
   # place (only a `usize` count / a placeholder character does), so taint
   # analysis clears it structurally.
+  #
+  # v0.3 additions (targeted audit pass over the real model-output
+  # population, see tests/detector_corpus/sql-rust/{safe,vulnerable}/s26-29,
+  # v23-25):
+  #   - FALSE POSITIVE fix: rusqlite/tokio-postgres two-stage prepared
+  #     statements (`conn.prepare("...")?; stmt.query_row([id], |row| ...)`)
+  #     were flagged because the existing $X.$M($Q, $P1, ...) sink focused
+  #     on whatever landed in the *first* argument of query_row/query_map/
+  #     query/query_one/query_opt/execute -- on a second-stage `Statement`
+  #     call that first argument is the *bind-parameter* array/params!
+  #     literal, not query text. Added array-literal/params! sanitizers
+  #     (s26-s29) so that shape can never satisfy the sink's $Q focus; the
+  #     actual query text is still covered by the `.prepare($Q)` sink.
+  #   - FALSE NEGATIVE fix: `if let Some($X) = $PARAM.get(...) { ... }` /
+  #     `let Some($X) = $PARAM.get(...) else { ... };` destructuring of a
+  #     tainted HashMap's `.get()` result does not propagate taint to $X
+  #     under plain dataflow (a "let $X = ...;"-shaped source that focuses
+  #     the LHS binds to the pattern site itself, not later reads of that
+  #     variable) -- added scoped sources tied to the same HashMap parameter
+  #     types already listed above (v23, v25).
+  #   - FALSE NEGATIVE *attempted, not fully closed*: the Vec-accumulate-
+  #     then-join query builder (`let mut c = Vec::new(); c.push(format!(...
+  #     tainted ...)); ...; sqlx::query(&c.join(...))`) already works when
+  #     the `.join()` result is bound to its own `let` variable before being
+  #     used (v24 and the existing v0.2 corpus already cover this -- no rule
+  #     change was needed). It still does NOT propagate when `.join()` (or
+  #     any other compound method-call expression) is called *inline*, as a
+  #     direct argument inside a `format!()`/`push_str()` macro invocation
+  #     (e.g. `push_str(&format!(" AND {}", params.join(" AND ")))`) --
+  #     Semgrep-OSS's taint dataflow does not recurse into compound
+  #     expressions nested inside macro call arguments in general (verified
+  #     this also breaks on unrelated compound exprs like
+  #     `format!("{}", user.to_string())`), so this is a genuine engine
+  #     limitation, not something a targeted propagator can fix without
+  #     over-generalizing. Left open; see gaps_left_open.
   - id: sql.rust.tainted-query-string
     languages: [rust]
     severity: ERROR
@@ -126,6 +161,33 @@ rules:
           - pattern: 'fn $FN(..., $PARAM: web::Json<$T>, ...) { ... }'
           - focus-metavariable: $PARAM
 
+      # if-let / let-else destructuring of Some($X) = $PARAM.get(...) on a
+      # tainted HashMap parameter: taint mode's dataflow does not by default
+      # carry taint through this kind of pattern-binding (a "let $X = ...;"
+      # source focused on the LHS binds to the pattern site, not the later
+      # variable reads), so an explicit source scoped to the same
+      # already-tainted parameter types is needed to catch it (v23-v25).
+      - patterns:
+          - pattern-inside: 'fn $FN(..., $PARAM: &HashMap<$K, $V>, ...) { ... }'
+          - pattern-inside: 'if let Some($X) = $PARAM.get(...) { ... }'
+          - pattern: $X
+      - patterns:
+          - pattern-inside: 'fn $FN(..., $PARAM: HashMap<$K, $V>, ...) { ... }'
+          - pattern-inside: 'if let Some($X) = $PARAM.get(...) { ... }'
+          - pattern: $X
+      - patterns:
+          - pattern-inside: 'fn $FN(..., $PARAM: &HashMap<$K, $V>, ...) { ... }'
+          - pattern-inside: |
+              let Some($X) = $PARAM.get(...) else { ... };
+              ...
+          - pattern: $X
+      - patterns:
+          - pattern-inside: 'fn $FN(..., $PARAM: HashMap<$K, $V>, ...) { ... }'
+          - pattern-inside: |
+              let Some($X) = $PARAM.get(...) else { ... };
+              ...
+          - pattern: $X
+
     pattern-sinks:
       # sqlx: the *string* call forms only -- query!/query_as! are macros
       # (`foo!(...)`), a different call shape that these patterns never match.
@@ -169,6 +231,20 @@ rules:
         to: $X
 
     pattern-sanitizers:
+      # --- rusqlite/tokio-postgres two-stage prepared-statement bind params:
+      # once a Statement comes from `.prepare(<literal or already-sanitized
+      # text>)`, the array/params! literal passed to its subsequent
+      # query_row/query_map/query/execute/query_one/query_opt call is the
+      # BOUND PARAMETERS, not query text -- rusqlite/tokio-postgres query
+      # text is never itself an array or a params! macro invocation.
+      # Sanitize the literal so it can never satisfy the $Q focus of the
+      # `$X.$M($Q, ...)` sink (s26-s28); the real injection sink for these
+      # two-stage flows is the `.prepare($Q)` sink above, which stays live.
+      - pattern: '[$A, ...]'
+      - pattern: '&[$A, ...]'
+      - pattern: 'params![$A, ...]'
+      - pattern: '&params![$A, ...]'
+
       # --- allowlisted column/ORDER BY chosen via a match over a fixed set
       # of literals. Semgrep's Rust grammar rejects "..." inside a match
       # arm list, so arities 2-6 are enumerated explicitly, each with both

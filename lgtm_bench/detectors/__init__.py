@@ -10,8 +10,8 @@ from .sql_ast import SqlAstDetector
 
 PACK_VERSIONS = {
     "sql": "sql@0.9.0",
-    "sql-go": "sql-go@0.2.0",
-    "sql-rust": "sql-rust@0.2.0",
+    "sql-go": "sql-go@0.3.0",
+    "sql-rust": "sql-rust@0.3.0",
 }
 
 
