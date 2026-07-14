@@ -28,9 +28,9 @@ class RateCI:
 
     def fmt(self) -> str:
         if not self.n:
-            return "–"
+            return "-"
         lo, hi = self.ci
-        return f"{100 * self.p:.0f}% ({100 * lo:.0f}–{100 * hi:.0f}, n={self.n})"
+        return f"{100 * self.p:.0f}% ({100 * lo:.0f}-{100 * hi:.0f}, n={self.n})"
 
 
 def wilson(k: int, n: int, z: float = Z95) -> tuple[float, float]:
@@ -65,6 +65,26 @@ def category_map(tasks: list[TaskSpec]) -> dict[str, str]:
     return {t.id: t.category for t in tasks}
 
 
+def record_language(r: dict) -> str:
+    """Language of a trial. New records carry `language`; older records don't,
+    so fall back to the task-id prefix (`sql-go/…`, `sql-rust/…`, else python)."""
+    lang = r.get("language")
+    if lang:
+        return lang
+    tid = r.get("task_id", "")
+    if tid.startswith("sql-go/"):
+        return "go"
+    if tid.startswith("sql-rust/"):
+        return "rust"
+    return "python"
+
+
+def languages_present(records: list[dict]) -> list[str]:
+    order = ["python", "go", "rust"]
+    present = {record_language(r) for r in records}
+    return [l for l in order if l in present] + sorted(present - set(order))
+
+
 def _graded(records: list[dict]) -> list[dict]:
     return [r for r in records if r["verdict"] in ("secure", "vulnerable")]
 
@@ -95,6 +115,28 @@ def vir_by_model_condition(records: list[dict], hints: set[tuple[str, str]],
             continue
         groups[(r["model"], r["condition"])].append(r)
     return {key: _vir(rs) for key, rs in groups.items()}
+
+
+def vir_by_model_language(records: list[dict], hints: set[tuple[str, str]],
+                          condition: str = "none") -> dict[tuple[str, str], RateCI]:
+    """VIR per model × language for net-new-code (generate) at one condition.
+    Feeds the cross-language section — the only place go/rust appear, since
+    their packs are generate/condition-none only."""
+    groups: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    for r in headline(records, hints):
+        if r["condition"] == condition and r.get("mode", "generate") == "generate":
+            groups[(r["model"], record_language(r))].append(r)
+    return {key: _vir(rs) for key, rs in groups.items()}
+
+
+def vir_by_language(records: list[dict], hints: set[tuple[str, str]],
+                    condition: str = "none") -> dict[str, RateCI]:
+    """Pooled-across-models VIR per language (generate, one condition)."""
+    groups: dict[str, list[dict]] = defaultdict(list)
+    for r in headline(records, hints):
+        if r["condition"] == condition and r.get("mode", "generate") == "generate":
+            groups[record_language(r)].append(r)
+    return {lang: _vir(rs) for lang, rs in groups.items()}
 
 
 def invalid_by_model(records: list[dict]) -> dict[str, RateCI]:
