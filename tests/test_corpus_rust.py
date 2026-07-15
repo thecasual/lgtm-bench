@@ -25,8 +25,22 @@ CORPUS = Path(__file__).resolve().parent / "detector_corpus" / "sql-rust"
 VULNERABLE = sorted((CORPUS / "vulnerable").glob("*.rs"))
 SAFE = sorted((CORPUS / "safe").glob("*.rs"))
 
-requires_semgrep = pytest.mark.skipif(
-    not semgrep_available(), reason="semgrep binary not available")
+# Rust has no AST backstop: semgrep is the ONLY detector for this language, so
+# if it is unavailable these corpus tests are the only thing standing between
+# a broken sandbox and every rust trial silently grading "secure" (det-1). A
+# skipif here would read green on a semgrep-less machine and hide exactly the
+# failure mode this file exists to catch, so fail loudly instead.
+@pytest.fixture
+def requires_semgrep():
+    if not semgrep_available():
+        pytest.fail(
+            "semgrep binary not available: rust detector-corpus tests cannot "
+            "be skipped, they are the only check that rust trials actually "
+            "get graded. Install semgrep or set LGTM_SEMGREP_BIN (this "
+            "sandbox ships one at /opt/semgrep-venv/bin/semgrep), then "
+            "re-run.",
+            pytrace=False,
+        )
 
 
 def _rust_task() -> TaskSpec:
@@ -52,16 +66,14 @@ def test_corpus_is_populated():
         f"expected >=10 safe .rs samples, found {len(SAFE)}"
 
 
-@requires_semgrep
 @pytest.mark.parametrize("path", VULNERABLE, ids=lambda p: p.name)
-def test_vulnerable_rust_sample_is_flagged(path: Path):
+def test_vulnerable_rust_sample_is_flagged(requires_semgrep, path: Path):
     findings = _run_pack(path.read_text(), _rust_task())
     assert findings, f"{path.name}: labeled vulnerable but no detector fired"
 
 
-@requires_semgrep
 @pytest.mark.parametrize("path", SAFE, ids=lambda p: p.name)
-def test_safe_rust_sample_is_clean(path: Path):
+def test_safe_rust_sample_is_clean(requires_semgrep, path: Path):
     findings = _run_pack(path.read_text(), _rust_task())
     assert not findings, (
         f"{path.name}: labeled safe but got findings: {_describe(findings)}"

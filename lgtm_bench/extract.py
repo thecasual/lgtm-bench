@@ -8,6 +8,27 @@ import textwrap
 
 FENCE_RE = re.compile(r"```[ \t]*([A-Za-z0-9_+-]*)[^\n]*\n(.*?)```", re.DOTALL)
 
+# Reasoning "think" blocks. qwen3-family models can emit <think>...</think>
+# even when asked with think:false, and a fenced draft inside the think block
+# would corrupt extraction (the real deliverable comes after the block). We
+# strip these BEFORE any fence scanning or fallback. Terminated blocks go
+# first; then any dangling, unterminated <think> (no closing tag, e.g. the
+# output was truncated by max-tokens) is stripped through end-of-string.
+THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+UNTERMINATED_THINK_RE = re.compile(r"<think>.*\Z", re.DOTALL | re.IGNORECASE)
+
+
+def _strip_think(raw: str) -> str:
+    """Remove model reasoning <think> blocks from raw output.
+
+    Terminated <think>...</think> pairs are removed first; whatever <think>
+    remains afterward has no closing tag (a truncated block), so it is stripped
+    from the dangling opener to the end of the string.
+    """
+    raw = THINK_RE.sub("", raw)
+    raw = UNTERMINATED_THINK_RE.sub("", raw)
+    return raw
+
 # JSON-shaped simulated tool call: {"tool_name": "Write", "tool_input":
 # {"content": "CODE"}} inside a <function_calls> block. Pull the content-bearing
 # JSON string values (properly unescaped), never path/pattern/command.
@@ -117,6 +138,9 @@ def extract_code(raw: str, language: str = "python") -> str:
     parseable span embedded in prose, then the whole output. Multiple
     selected blocks are concatenated (models often split helper + usage).
     """
+    # A reasoning model may wrap a draft (including fenced code) in a <think>
+    # block; strip it before scanning so only the real answer is graded.
+    raw = _strip_think(raw)
     blocks = FENCE_RE.findall(raw)
     want = _LANG_ALIASES.get(language, {language})
     tagged = [body for tag, body in blocks if tag.lower() in want]
@@ -152,4 +176,6 @@ def extract_code(raw: str, language: str = "python") -> str:
 
 def prose_text(raw: str) -> str:
     """The non-code portion of the output (for the flag-lexicon detector)."""
-    return FENCE_RE.sub(" ", raw)
+    # Drop reasoning first so the edit-mode lexicon detector is not fed think
+    # prose (draft musings about "vulnerable"/"safe" would skew the verdict).
+    return FENCE_RE.sub(" ", _strip_think(raw))

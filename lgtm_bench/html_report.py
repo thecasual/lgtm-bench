@@ -9,6 +9,7 @@ records/metrics as the markdown report, so the two never disagree.
 from __future__ import annotations
 
 import html
+import sys
 from collections import defaultdict
 from pathlib import Path
 
@@ -23,9 +24,12 @@ BRAND = {
     "wordmark": "Sam Wallace",
     "report_kicker": "Security Research",
     "report_title": "Does an LLM Write Secure Code?",
-    "report_subtitle": "How often six Claude models introduce SQL injection, "
-                       "where the risk actually lives, and what it means for how "
-                       "you prompt, review, and spend tokens.",
+    # NOTE: the subtitle's model-count clause is computed from the data in
+    # build_html_report (see `subtitle`), never hardcoded here. BRAND holds
+    # styling and static copy only, never a data claim like the model count.
+    "report_subtitle_tail": "introduce SQL injection, where the risk actually "
+                            "lives, and what it means for how you prompt, "
+                            "review, and spend tokens.",
     "repo_url": "https://github.com/thecasual/lgtm-bench",
     "site_url": "https://www.samwallace.dev/",
     "author": "Sam Wallace",
@@ -121,14 +125,44 @@ def build_html_report(records: list[dict], tasks: list[TaskSpec]) -> str:
     records_all = list(records)
     langs = M.languages_present(records_all)
     # Findings are the mature Python vertical; go/rust get a cross-language
-    # block (they're Semgrep v0.1 and generate/condition-none only).
+    # block (their audited taint packs run generate/condition-none only). All
+    # pack versions come from the records, never hardcoded here.
     records = [r for r in records_all if M.record_language(r) == "python"]
-    models = sorted({r["model"] for r in records})
+    models = M.sorted_models({r["model"] for r in records})
     n_total = len(records_all)
     n_inv = sum(1 for r in records_all if r["verdict"] == "invalid")
     n_vuln = sum(1 for r in records if r["verdict"] == "vulnerable")
     run_ids = sorted({r.get("run_id", "?") for r in records_all})
     pack = sorted({r.get("detector_pack_version", "") for r in records_all if r.get("detector_pack_version")})
+
+    # Vendor split for the subtitle and limits box (both derive the model count
+    # from data, never from BRAND). Natural-sorted so numbered names order right.
+    all_models = M.sorted_models({r["model"] for r in records_all})
+    oss_models = [m for m in all_models if not m.startswith("claude-")]
+    n_claude = len(all_models) - len(oss_models)
+
+    # Pack versions grouped by language (data-derived). Used for the limits-box
+    # pack clause, the cross-language narrative, and the mixed-pack guardrail.
+    packs_by_lang = M.packs_by_language(records_all)
+    nonpy_packs = sorted({v for l, vs in packs_by_lang.items()
+                          if l != "python" for v in vs})
+
+    # Scope phrase derived from languages present, so the "one language" copy
+    # never contradicts a rendered cross-language section (rep-1's html twin).
+    if len(langs) == 1:
+        _scope_phrase = "This is one language and one vulnerability class."
+    else:
+        _scope_phrase = ("This covers "
+                         + ", ".join(l.capitalize() for l in langs)
+                         + " and one vulnerability class (SQL injection).")
+
+    # rep-3: subtitle model-count clause computed from the data.
+    if oss_models:
+        model_clause = (f"{len(all_models)} models ({n_claude} Claude, "
+                        f"{len(oss_models)} open-weight)")
+    else:
+        model_clause = f"{n_claude} Claude models"
+    subtitle = f"How often {model_clause} {BRAND['report_subtitle_tail']}"
 
     # cross-language rows (only rendered if go/rust present)
     xlang = M.vir_by_model_language(records_all, hints, condition="none")
@@ -202,10 +236,11 @@ def build_html_report(records: list[dict], tasks: list[TaskSpec]) -> str:
     a(f"<div class='brandrow'><span class='wordmark'>{_e(BRAND['wordmark'])}</span>"
       f"<span class='kicker'>{_e(BRAND['report_kicker'])}</span></div>")
     a(f"<h1>{_e(BRAND['report_title'])}</h1>")
-    a(f"<p class='subtitle'>{_e(BRAND['report_subtitle'])}</p>")
+    a(f"<p class='subtitle'>{_e(subtitle)}</p>")
     a("<div class='meta'>")
-    a(f"<span><b>{n_total}</b> trials</span><span><b>{len(models)}</b> models</span>"
-      f"<span><b>{n_vuln}</b> flagged vulnerable</span>"
+    a(f"<span><b>{n_total}</b> trials</span>"
+      f"<span><b>{len(all_models)}</b> models</span>"
+      f"<span><b>{n_vuln}</b> flagged vulnerable (this run)</span>"
       f"<span>detector <b>{_e(', '.join(pack) or 'n/a')}</b></span>")
     a("</div>")
     a("<div class='btnrow'>")
@@ -213,6 +248,22 @@ def build_html_report(records: list[dict], tasks: list[TaskSpec]) -> str:
     a(f"<a class='btn ghost' href='{_e(BRAND['repo_url'])}'>View the code &amp; raw data →</a>")
     a("</div>")
     a("</header>")
+
+    # rep/dryrun-4: mixed-pack guardrail. One language with two pack versions is
+    # a skipped/partial regrade. Shout in the body and on stderr; still render.
+    mixed = M.mixed_pack_languages(records_all)
+    if mixed:
+        detail = "; ".join(f"{lang}: {', '.join(vs)}"
+                           for lang, vs in sorted(mixed.items()))
+        a("<div style='background:#7f1d1d;color:#fff;border:2px solid #ef4444;"
+          "border-radius:12px;padding:16px 20px;margin:24px 0;font-weight:600;"
+          "line-height:1.5;'>&#9888; <b>WARNING: mixed detector pack versions "
+          "within a language.</b> " + _e(detail) + ". This is the signature of "
+          "a skipped or partial regrade (raw and regraded records pooled "
+          "together), so every number below mixes inconsistently graded trials. "
+          "Regrade before citing.</div>")
+        print("WARNING: mixed detector pack versions within a language: "
+              + detail, file=sys.stderr)
 
     # TL;DR strip
     a("<section class='tldr'>")
@@ -258,12 +309,26 @@ def build_html_report(records: list[dict], tasks: list[TaskSpec]) -> str:
         a("<h2><span class='num'>01b</span> Cross-language: Go and Rust track Python</h2>")
         a("<p>The same everyday tasks, ported to " + _e(" and ".join(other_langs)) +
           ". New-code injection rates pooled across models, by language:</p>")
-        pooled_rows = [(lang, 100 * xlang_pooled[lang].p,
-                        f"n={xlang_pooled[lang].n}")
-                       for lang in langs if lang in xlang_pooled and xlang_pooled[lang].n]
+        # rep-7: bars are trial-weighted; the caption also carries the
+        # equal-weight macro-average (each model once, no CI), so a K=8
+        # open-weight cell can't silently dominate the pooled bar.
+        pooled_rows = []
+        for lang in langs:
+            r = xlang_pooled.get(lang)
+            if not (r and r.n):
+                continue
+            macro = M.macro_vir(records_all, hints, condition="none", language=lang)
+            cap = f"n={r.n}"
+            if macro is not None:
+                cap += f", {100*macro:.0f}% equal-weight"
+            pooled_rows.append((lang, 100 * r.p, cap))
         a("<div class='card'>")
         a("<div class='cardhead'>Injection rate in new code, by language (pooled)</div>")
         a(_bar_chart(pooled_rows, color_key=sev_color, label_w=120))
+        a("<p class='fig-note'>Bars are <strong>trial-weighted</strong> VIR pooled across "
+          "models; the caption's <strong>equal-weight</strong> figure averages each model's "
+          "VIR once (no CI). They can diverge when models ran different trial counts (e.g. "
+          "K=8 open-weight cells alongside K=2 Claude cells), so read both.</p>")
         a("<p class='fig-note'><strong>Earlier drafts put Go and Rust at roughly 4x Python. "
           "That gap was a detector artifact, and it is gone.</strong> The first Go/Rust grader "
           "was a pattern-based Semgrep rule with no dataflow, so it flagged safe idioms as "
@@ -271,8 +336,10 @@ def build_html_report(records: list[dict], tasks: list[TaskSpec]) -> str:
           "passed as <code>args...</code>, allowlisted <code>ORDER BY</code> where the column "
           "comes from a map or switch, integer <code>LIMIT</code>/<code>OFFSET</code>. An "
           "independent adversarial audit hand-read every flagged trial and found most were "
-          "false positives on safe code. The current packs (<code>sql-go@0.3.0</code>, "
-          "<code>sql-rust@0.3.0</code>) use Semgrep <strong>taint mode</strong> and recognise "
+          "false positives on safe code. The current packs (" +
+          (", ".join(f"<code>{_e(v)}</code>" for v in nonpy_packs)
+           or "the current taint packs") +
+          ") use Semgrep <strong>taint mode</strong> and recognise "
           "those sanitizing idioms; a second independent audit confirmed they match the "
           "hand-audit (Go: zero false-positive and zero false-negative on the population; Rust: "
           "zero false-positive). The corrected picture mirrors Python: frontier models rarely "
@@ -371,7 +438,7 @@ def build_html_report(records: list[dict], tasks: list[TaskSpec]) -> str:
          "so don't reach for a cheap model on security-sensitive generation."),
         ("Read the prose, not just the code.", "Some models flag a vulnerability they don't "
          "fix. That comment is review signal. Don't strip it."),
-        ("Measure your own stack.", "This is one language and one vulnerability class. Run it "
+        ("Measure your own stack.", _scope_phrase + " Run it "
          "on your models, your prompts, and your code. Re-grading is free and offline."),
     ]:
         a(f"<li><b>{_e(item[0])}</b> {_e(item[1])}</li>")
@@ -385,24 +452,40 @@ def build_html_report(records: list[dict], tasks: list[TaskSpec]) -> str:
       "<code>secure</code> verdict means no detector fired, not that the code is proven "
       "safe, so every rate here is a floor. Model calls ran through Claude Code headless on "
       "a subscription. Detection is free to re-run offline.</p>")
+    # rep-6: STATIC HISTORICAL PROSE. The 77 -> 40 -> 48 arc is the frozen
+    # result of auditing the 440-trial Claude Python population at sql@0.9.0.
+    # The final count is a constant, NOT a live tally, so a later data drop
+    # can't be misattributed to that hand-audit. The current run's vulnerable
+    # total is shown separately in the masthead meta ("flagged vulnerable
+    # (this run)").
     a("<p>The grader is the hard part, so it got audited hard. Three rounds of independent "
       "models re-checked every flagged trial and a sample of the unflagged ones, each "
       "candidate defect had to be reproduced before it counted, and every confirmed misgrade "
-      "became a permanent regression test. The flagged count moved <b>77 to 40</b> as false "
-      f"positives came out, then <b>40 to {n_vuln}</b> as real false negatives got caught. "
-      "Both directions. Every vulnerable verdict was then hand-confirmed against its raw "
-      "output.</p>")
-    _all_models = sorted({r["model"] for r in records_all})
-    _oss = [m for m in _all_models if not m.startswith("claude-")]
-    if _oss:
-        _vendor = (f"{len(_all_models)} models with {len(_oss)} open-weight "
-                   f"({_e(', '.join(_oss))}), so the cross-vendor generation "
+      "became a permanent regression test. On the 440-trial Claude Python population audited "
+      "at <code>sql@0.9.0</code>, the flagged count moved <b>77 to 40</b> as false positives "
+      "came out, then <b>40 to 48</b> as real false negatives got caught. Both directions. "
+      "Those are the frozen audit numbers for that population, not a live count of the "
+      "current run. Every vulnerable verdict in that audited population was hand-confirmed "
+      "against its raw output; trials added since (new models, new languages) are graded by "
+      "the same audited detectors but not individually re-read.</p>")
+    if oss_models:
+        _vendor = (f"{len(all_models)} models with {len(oss_models)} open-weight "
+                   f"({_e(', '.join(oss_models))}), so the cross-vendor generation "
                    "question is only lightly probed")
     else:
-        _vendor = ("all " + str(len(_all_models)) + " models are Claude-family so "
+        _vendor = ("all " + str(len(all_models)) + " models are Claude-family so "
                    "the cross-vendor generation question is only half answered")
-    a("<div class='limits'><b>Before you cite it:</b> this is a proof of concept. K=2 trials "
-      f"per cell, Python fully hardened (Go/Rust packs are v0.1), one vulnerability class "
+    # rep-4: K clause from data. rep-5: pack clause from data (never "v0.1").
+    _k = _e(M.k_clause(records_all))
+    if nonpy_packs:
+        _pack_clause = (" (" + _e(", ".join(l.capitalize()
+                                             for l in langs if l != "python"))
+                        + " on audited taint packs "
+                        + _e(", ".join(nonpy_packs)) + ")")
+    else:
+        _pack_clause = ""
+    a("<div class='limits'><b>Before you cite it:</b> this is a proof of concept. " + _k +
+      " trials per cell, Python fully hardened" + _pack_clause + ", one vulnerability class "
       f"(SQL injection), and {_vendor}. Lean on the confidence intervals in the raw report, "
       "not the point estimates.</div>")
     a("</section>")

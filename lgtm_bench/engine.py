@@ -2,6 +2,8 @@
 resumable JSONL persistence (TECH_SPEC §3)."""
 from __future__ import annotations
 
+import json
+import os
 import shutil
 import sys
 import tempfile
@@ -214,30 +216,114 @@ def execute_run(cfg: RunConfig) -> Path:
 def regrade(results_path: Path, tasks_root: Path, out_path: Optional[Path] = None,
             lexicon_dir: Optional[Path] = None) -> Path:
     """Re-grade stored raw outputs with current detectors (§9), no model calls."""
+    from .detectors.semgrep import semgrep_available
+
     tasks = {t.id: t for t in load_tasks(tasks_root)}
     src = ResultStore(results_path)
     dest_path = out_path or results_path.with_suffix(".regraded.jsonl")
-    # Read everything BEFORE touching dest: with dest == source, unlinking
-    # first would destroy the run's raw outputs irrecoverably. Dedup so a
-    # retried trial's successful record supersedes its earlier error row.
+    # Read everything BEFORE touching dest: with dest == source (an in-place
+    # regrade of a *.regraded.jsonl input) the run's raw outputs live only in
+    # this file. Dedup so a retried trial's successful record supersedes its
+    # earlier error row.
     records = src.load(dedup=True)
     if not records and results_path.resolve() == dest_path.resolve():
         raise ValueError(f"refusing in-place regrade of unreadable/empty {results_path}")
-    if dest_path.exists():
-        dest_path.unlink()
-    dest = ResultStore(dest_path)
-    for rec in records:
-        task = tasks.get(rec["task_id"])
-        record = TrialRecord.model_validate(rec)
-        if task is None or record.error is not None:
-            dest.append(record)
-            continue
-        g = grade(task, record.raw_output, record.condition, lexicon_dir)
-        record.verdict = g.verdict
-        record.findings = g.findings
-        record.extracted_code = g.extracted_code
-        record.fixed_existing = g.fixed_existing
-        record.flagged_existing = g.flagged_existing
-        record.detector_pack_version = g.detector_pack_version
-        dest.append(record)
+
+    # FIX det-1 (preflight): go/rust have NO detector besides semgrep, so a
+    # regrade without semgrep would silently grade every go/rust trial secure
+    # while still stamping a detector-pack version. Fail FAST here, before any
+    # temp file is created, rather than 20 minutes into the loop. Resolve the
+    # record set against the loaded tasks and refuse if any record maps to a
+    # go/rust task while semgrep is unavailable.
+    if not semgrep_available():
+        blocked_langs: set[str] = set()
+        for rec in records:
+            task = tasks.get(rec.get("task_id"))
+            if task is not None and task.language in ("go", "rust"):
+                blocked_langs.add(task.language)
+        if blocked_langs:
+            raise RuntimeError(
+                "semgrep is required to regrade "
+                f"{'/'.join(sorted(blocked_langs))} trials but is unavailable. "
+                "go/rust have no non-semgrep detector, so a regrade would "
+                "silently grade every trial secure while stamping a detector "
+                "version. Install semgrep or set LGTM_SEMGREP_BIN to a semgrep "
+                "binary (sandbox path: /opt/semgrep-venv/bin/semgrep), then "
+                "re-run.")
+
+    # FIX pipe-4 (atomic write): build the regraded output in a temp file in
+    # the SAME directory, then os.replace() onto dest_path only after the loop
+    # completes. Previously dest_path was unlinked up front and appended to
+    # record-by-record; with dest == source a mid-loop crash (KeyError, Ctrl-C,
+    # disk full) permanently destroyed the stored raw outputs. Now a crash
+    # leaves the original file untouched.
+    dest_dir = dest_path.parent
+    dest_dir.mkdir(parents=True, exist_ok=True)
+
+    # FIX pipe-3: task_ids present in records but missing from the loaded task
+    # set. Their verdict/detector_pack_version cannot be recomputed, so they
+    # pass through STALE; collect them (error records legitimately pass through
+    # and are excluded) and warn loudly after the loop.
+    unmapped_ids: set[str] = set()
+    unmapped_count = 0
+    regraded_count = 0
+    total = len(records)
+
+    fd, tmp_name = tempfile.mkstemp(dir=str(dest_dir), suffix=".regrade.tmp")
+    try:
+        with os.fdopen(fd, "w") as out_f:
+            for i, rec in enumerate(records, 1):
+                # FIX pipe-3 guard: a record missing the task_id key entirely
+                # must be treated as unmapped, not crash the whole regrade.
+                task_id = rec.get("task_id")
+                task = tasks.get(task_id) if task_id is not None else None
+                rec_error = rec.get("error")
+                if task is None or rec_error is not None:
+                    # Pass through unchanged (stale verdict/version preserved).
+                    # Write the raw dict rather than validating: a record
+                    # missing a required field (e.g. task_id) is still kept
+                    # verbatim instead of raising.
+                    if rec_error is None:
+                        unmapped_ids.add(task_id if task_id is not None
+                                         else "<missing task_id>")
+                        unmapped_count += 1
+                    out_f.write(json.dumps(rec) + "\n")
+                else:
+                    record = TrialRecord.model_validate(rec)
+                    g = grade(task, record.raw_output, record.condition, lexicon_dir)
+                    record.verdict = g.verdict
+                    record.findings = g.findings
+                    record.extracted_code = g.extracted_code
+                    record.fixed_existing = g.fixed_existing
+                    record.flagged_existing = g.flagged_existing
+                    record.detector_pack_version = g.detector_pack_version
+                    out_f.write(record.model_dump_json() + "\n")
+                    regraded_count += 1
+                # FIX dryrun-5: progress every 50 records so the ~40-minute
+                # loop is not silent.
+                if i % 50 == 0:
+                    print(f"[lgtm] regrade {i}/{total} "
+                          f"({regraded_count} graded, {unmapped_count} unmapped)",
+                          file=sys.stderr, flush=True)
+            out_f.flush()
+            os.fsync(out_f.fileno())
+        # Only now, after the full file is written and flushed, swap it in.
+        os.replace(tmp_name, dest_path)
+    except BaseException:
+        # A crash (exception, KeyboardInterrupt) leaves the original file
+        # untouched; discard the partial temp file.
+        try:
+            os.unlink(tmp_name)
+        except FileNotFoundError:
+            pass
+        raise
+
+    if unmapped_ids:
+        print(f"[lgtm] WARNING: regrade passed through {unmapped_count} "
+              f"non-error record(s) with a task_id not in the loaded task set; "
+              f"their verdicts and detector_pack_version are STALE. Offending "
+              f"task_ids: {sorted(unmapped_ids)}", file=sys.stderr, flush=True)
+    print(f"[lgtm] regrade complete: {total} records "
+          f"({regraded_count} graded, {unmapped_count} unmapped) -> {dest_path}",
+          file=sys.stderr, flush=True)
     return dest_path

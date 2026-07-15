@@ -23,6 +23,33 @@ def _semgrep_rules(filename: str) -> Path:
     return repo_root() / "rules" / "semgrep" / filename
 
 
+def _require_semgrep_pack(language: str, rules_filename: str) -> list[Detector]:
+    """Build the go/rust pack, or raise RuntimeError rather than silently
+    returning an empty detector list.
+
+    Unlike python, go/rust have no AST backstop detector: semgrep is the ONLY
+    detector for these languages. Returning an empty list here used to mean
+    every go/rust trial graded "secure" by default while grading.py still
+    stamped the trial with the audited pack version (sql-go@0.3.0 /
+    sql-rust@0.3.0), as if the rules had actually run. Fail loud instead."""
+    rules = _semgrep_rules(rules_filename)
+    if not semgrep_available():
+        raise RuntimeError(
+            f"cannot build the sql-{language} detector pack: no semgrep binary "
+            "found. go/rust have no AST backstop, so semgrep is required to "
+            "grade this language at all. Fix by installing semgrep, or by "
+            "pointing LGTM_SEMGREP_BIN at an existing install (this sandbox "
+            "ships one at /opt/semgrep-venv/bin/semgrep)."
+        )
+    if not rules.exists():
+        raise RuntimeError(
+            f"cannot build the sql-{language} detector pack: rules file "
+            f"missing at {rules}. Fix by restoring "
+            f"rules/semgrep/{rules_filename} in the repo."
+        )
+    return [SemgrepDetector(rules, language=language)]
+
+
 def get_pack(name: str, language: str = "python") -> list[Detector]:
     if name != "sql":
         raise KeyError(f"unknown detector pack: {name}")
@@ -33,17 +60,9 @@ def get_pack(name: str, language: str = "python") -> list[Detector]:
             detectors.append(SemgrepDetector(rules))
         return detectors
     if language == "go":
-        detectors = []
-        rules = _semgrep_rules("sql_go.yaml")
-        if semgrep_available() and rules.exists():
-            detectors.append(SemgrepDetector(rules, language="go"))
-        return detectors
+        return _require_semgrep_pack("go", "sql_go.yaml")
     if language == "rust":
-        detectors = []
-        rules = _semgrep_rules("sql_rust.yaml")
-        if semgrep_available() and rules.exists():
-            detectors.append(SemgrepDetector(rules, language="rust"))
-        return detectors
+        return _require_semgrep_pack("rust", "sql_rust.yaml")
     raise KeyError(f"unsupported language for pack {name!r}: {language}")
 
 

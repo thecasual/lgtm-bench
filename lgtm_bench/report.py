@@ -1,6 +1,7 @@
 """Markdown report generation (TECH_SPEC §8)."""
 from __future__ import annotations
 
+import sys
 from collections import defaultdict
 from pathlib import Path
 
@@ -33,7 +34,8 @@ def _bottom_line(add, records, hints, cats, models, records_all=None, langs=None
 
     # net-new-code VIR range across models (generate, none)
     labels = M.eradication_labels(records, hints, cats)
-    standing = sorted({m for (m, c), lab in labels.items() if lab == "standing risk"})
+    standing = sorted({m for (m, c), lab in labels.items() if lab == "standing risk"},
+                      key=M.natural_sort_key)
     none_vir = M.vir_by_model_condition(records, hints, mode="generate")
     none_rates = {m: none_vir[(m, "none")] for m in models if (m, "none") in none_vir}
     if none_rates:
@@ -55,8 +57,10 @@ def _bottom_line(add, records, hints, cats, models, records_all=None, langs=None
         cla = {m: r for m, r in none_rates.items()
                if m.startswith("claude-") and r.n}
         if oss and cla:
-            oss_bits = ", ".join(f"`{m}` {100*r.p:.0f}%"
-                                 for m, r in sorted(oss.items()))
+            oss_bits = ", ".join(
+                f"`{m}` {100*r.p:.0f}%"
+                for m, r in sorted(oss.items(),
+                                   key=lambda kv: M.natural_sort_key(kv[0])))
             cla_lo = min(r.p for r in cla.values())
             best = sorted(cla.items(), key=lambda kv: kv[1].p)[:2]
             best_bits = ", ".join(f"`{m}` {100*r.p:.0f}%" for m, r in best)
@@ -83,8 +87,10 @@ def _bottom_line(add, records, hints, cats, models, records_all=None, langs=None
     # remediation flag vs fix, name the actual models, no frontier/size framing
     rem = M.remediation(records)
     if rem:
-        flaggers = sorted(m for m, d in rem.items() if d["flag"].n and d["flag"].p >= 0.75)
-        quiet = sorted(m for m, d in rem.items() if d["flag"].n and d["flag"].p <= 0.25)
+        flaggers = sorted((m for m, d in rem.items() if d["flag"].n and d["flag"].p >= 0.75),
+                          key=M.natural_sort_key)
+        quiet = sorted((m for m, d in rem.items() if d["flag"].n and d["flag"].p <= 0.25),
+                       key=M.natural_sort_key)
         parts = []
         if flaggers:
             parts.append(f"{', '.join('`'+m+'`' for m in flaggers)} flagged the "
@@ -111,7 +117,21 @@ def _bottom_line(add, records, hints, cats, models, records_all=None, langs=None
     other = [l for l in langs if l != "python"]
     if other:
         pooled = M.vir_by_language(records_all, hints, condition="none")
-        bits = ", ".join(f"{l} {100*pooled[l].p:.0f}%" for l in langs if l in pooled)
+        # Report BOTH poolings: trial-weighted (every trial counts once, so a
+        # K=8 open-weight cell pulls harder) and equal-weight (every model
+        # counts once). Disclosed so a K=8 OSS drop can't silently swing the
+        # headline. The equal-weight figure is a plain mean, no CI.
+        bit_list = []
+        for l in langs:
+            if l not in pooled:
+                continue
+            macro = M.macro_vir(records_all, hints, condition="none", language=l)
+            if macro is not None:
+                bit_list.append(f"{l} {100*pooled[l].p:.0f}% trial-weighted / "
+                                f"{100*macro:.0f}% averaging models equally")
+            else:
+                bit_list.append(f"{l} {100*pooled[l].p:.0f}% trial-weighted")
+        bits = ", ".join(bit_list)
         other_names = " and ".join(l.capitalize() for l in other)
         bullets.append(
             f"**{other_names} look like Python once the detector can see "
@@ -119,14 +139,15 @@ def _bottom_line(add, records, hints, cats, models, records_all=None, langs=None
             f"pattern-based grader put Go and Rust ~4x higher, but an "
             f"independent adversarial audit showed that gap was a detector "
             f"artifact: safe allowlist and placeholder idioms misread as "
-            f"injections. The v0.3 taint packs match the hand-audit, and the "
+            f"injections. The current taint packs match the hand-audit, and the "
             f"corrected picture is the same as Python: frontier models sit near "
             f"0% in every language, the weak and open-weight models carry the "
             f"double-digit rates. (Rust is a lower bound; see **Cross-language**.)")
 
     lang_clause = ("one language" if len(langs) == 1
                    else f"{len(langs)} languages, only Python fully hardened")
-    non_claude = sorted(m for m in models if not m.startswith("claude-"))
+    non_claude = sorted((m for m in models if not m.startswith("claude-")),
+                        key=M.natural_sort_key)
     if non_claude:
         vendor_clause = (
             f"{nmodels} models, {len(non_claude)} of them open-weight "
@@ -140,7 +161,8 @@ def _bottom_line(add, records, hints, cats, models, records_all=None, langs=None
         "**Read this as a proof-of-concept, not a leaderboard.** This run "
         "covers **1 of the 6** pre-registered vulnerability hypotheses (SQL "
         f"injection only), {vendor_clause}, "
-        f"{lang_clause}, K=2 trials/cell. Rely on the CIs. See **Limitations**.")
+        f"{lang_clause}, {M.k_clause(records_all)} trials/cell. Rely on the "
+        "CIs. See **Limitations**.")
 
     for b in bullets:
         add(f"- {b}")
@@ -154,10 +176,11 @@ def build_report(records: list[dict], tasks: list[TaskSpec]) -> str:
     langs = M.languages_present(records_all)
     # The analytical body is the mature Python vertical (AST detector, fixtures,
     # edit tasks). Go/Rust are a separate cross-language section below, since
-    # their Semgrep packs are v0.1 and generate/condition-none only. Mixing
-    # them into the headline would misrepresent both.
+    # their audited taint packs run generate/condition-none only. Mixing them
+    # into the headline would misrepresent both. Pack versions are read from the
+    # records (see the detector-packs line), never hardcoded here.
     records = [r for r in records_all if M.record_language(r) == "python"]
-    models = sorted({r["model"] for r in records})
+    models = M.sorted_models({r["model"] for r in records})
     conditions = [c for c in ("none", "clean-repo", "dirty-repo")
                   if any(r["condition"] == c for r in records)]
     lines: list[str] = []
@@ -169,15 +192,27 @@ def build_report(records: list[dict], tasks: list[TaskSpec]) -> str:
     n_err = sum(1 for r in records_all if r.get("error"))
     n_rl = sum(1 for r in records_all if r.get("error") and
                ("429" in r["error"] or "session limit" in r["error"]))
-    n_inv = sum(1 for r in records_all if r["verdict"] == "invalid")
+    # All-language invalid count (renamed so it can never be silently divided by
+    # a Python-only denominator, the rep-2 bug). The limitations section computes
+    # its own Python-scoped count separately.
+    n_inv_all = sum(1 for r in records_all if r["verdict"] == "invalid")
     add(f"- **Trials:** {len(records_all)} total across "
         f"{len(langs)} language(s) ({', '.join(langs)}); "
-        f"{n_inv} invalid ({n_err} runner errors, "
-        f"{n_inv - n_err} genuinely ungradable output)")
+        f"{n_inv_all} invalid ({n_err} runner errors, "
+        f"{n_inv_all - n_err} genuinely ungradable output)")
     add(f"- **Models:** {', '.join(models)}")
-    packs = sorted({r.get("detector_pack_version", "") for r in records_all if r.get("detector_pack_version")})
-    add(f"- **Detector packs:** {', '.join(packs) or 'n/a'} · "
-        f"semgrep {'active' if semgrep_available() else 'UNAVAILABLE (AST backstop only)'}")
+    # Pack versions come from the records (stamped by the offline grading run),
+    # never from this reporting host. Semgrep availability below is scoped to
+    # re-grading on THIS host and to the languages that actually depend on it.
+    packs_by_lang = M.packs_by_language(records_all)
+    pack_list = sorted({v for vs in packs_by_lang.values() for v in vs})
+    add(f"- **Detector packs (read from the records, set by the offline grade):** "
+        f"{', '.join(pack_list) or 'n/a'}")
+    sem = "installed" if semgrep_available() else "not installed"
+    add(f"- **Semgrep on this reporting host:** {sem}. This affects only "
+        "re-grading here, not the verdicts above (those were graded offline). "
+        "Python carries an AST backstop, so its verdicts reproduce without "
+        "semgrep; Go and Rust have no backstop and require semgrep to re-grade.")
     fixtures = sorted({r.get("fixture_version") or "" for r in records if r.get("fixture_version")})
     if fixtures:
         add(f"- **Fixture version:** {', '.join(fixtures)}")
@@ -186,6 +221,21 @@ def build_report(records: list[dict], tasks: list[TaskSpec]) -> str:
         "calls, or run a fresh benchmark, via [docs/REPRODUCE.md]"
         "(REPRODUCE.md). How verdicts are decided and validated: "
         "[docs/METHODOLOGY.md](METHODOLOGY.md).\n")
+
+    # -- mixed-pack guardrail (dryrun-4) ----------------------------------
+    # A single language carrying two detector_pack_versions is the signature of
+    # a skipped/partial regrade (raw sql-go@0.1.0 mixed with regraded 0.3.0).
+    # We do NOT refuse to render; we shout, in the report body and on stderr.
+    mixed = M.mixed_pack_languages(records_all)
+    if mixed:
+        detail = "; ".join(f"{lang}: {', '.join(vs)}"
+                           for lang, vs in sorted(mixed.items()))
+        add("> ⚠️ **WARNING: mixed detector pack versions within a language.** "
+            f"{detail}. This is the signature of a skipped or partial regrade "
+            "(raw and regraded records pooled together). Every number below "
+            "mixes inconsistently graded trials. Regrade before citing.\n")
+        print("WARNING: mixed detector pack versions within a language: "
+              + detail, file=sys.stderr)
 
     # -- bottom line (computed) -------------------------------------------
     _bottom_line(add, records, hints, cats, models,
@@ -203,24 +253,34 @@ def build_report(records: list[dict], tasks: list[TaskSpec]) -> str:
         "existing vulnerable code (brownfield remediation).\n")
     add("All rates are VIR over non-invalid trials, excluding safety-hint "
         "variants; ranges are **Wilson 95% CIs**. This is a proof-of-concept "
-        "run at small per-cell samples (K=2 trials): **aggregates are "
-        "directional, individual cells are illustrative, and every CI should "
-        "be read before any single point estimate.** A `secure` verdict means "
-        "no detector fired, not proven safety, so VIR is a lower bound.\n")
+        f"run at small per-cell samples ({M.k_clause(records_all)} trials): "
+        "**aggregates are directional, individual cells are illustrative, and "
+        "every CI should be read before any single point estimate.** A `secure` "
+        "verdict means no detector fired, not proven safety, so VIR is a lower "
+        "bound.\n")
+    # This paragraph is STATIC HISTORICAL PROSE. The 77 -> 40 -> 48 arc
+    # describes one frozen event: the adversarial audit of the 440-trial Claude
+    # Python population graded at sql@0.9.0. The final count (48) is a constant,
+    # NOT a live tally of vulnerable verdicts, so a later data drop of new
+    # models cannot be misattributed to that hand-audit. The current run's
+    # vulnerable total is reported separately in the Headline table below.
     add("**Grader credibility:** the detector was hardened across an "
         "adversarial false-positive/false-negative audit, independent models "
         "re-checking every flagged trial and a sample of unflagged ones, each "
-        "candidate defect reproduced before it counted. Concretely, the "
+        "candidate defect reproduced before it counted. Concretely, on the "
+        "440-trial Claude Python population audited at `sql@0.9.0`, the "
         "flagged-trial count fell **77 → 40** as false positives (safe code "
-        "wrongly flagged) were removed, then rose **40 → " +
-        str(sum(1 for r in records if r["verdict"] == "vulnerable")) +
-        "** as genuine "
+        "wrongly flagged) were removed, then rose **40 → 48** as genuine "
         "false negatives (real injections graded secure) were caught, both "
-        "directions checked. Each confirmed misgrade became a fix plus a "
-        "permanent regression sample in `tests/detector_corpus/` (now " +
-        "60+ samples). Every vulnerable verdict in this report was then "
-        "hand-confirmed against its raw output. See `docs/METHODOLOGY.md` for "
-        "the full audit trail and `docs/poc-evidence.md` for per-trial "
+        "directions checked. Those figures are the frozen audit result for "
+        "that population, not a live count of the current run. Each confirmed "
+        "misgrade became a fix plus a permanent regression sample in "
+        "`tests/detector_corpus/` (now 60+ samples). Every vulnerable verdict "
+        "in that audited population was hand-confirmed against its raw "
+        "output; trials added since (new models, new languages) are graded by "
+        "the same audited detectors but not individually re-read. See "
+        "`docs/METHODOLOGY.md` for the full audit trail and "
+        "`docs/poc-evidence.md` for per-trial "
         "prompt→output→findings→verdict.\n")
 
     # -- headline leaderboard (generate-mode only: comparable net-new-code
@@ -247,6 +307,12 @@ def build_report(records: list[dict], tasks: list[TaskSpec]) -> str:
     # -- cross-language section (only when go/rust data is present)
     other_langs = [l for l in langs if l != "python"]
     if other_langs:
+        # Name the actual non-Python pack versions from the data, never a
+        # hardcoded "sql-go@0.3.0" that would go stale on the next pack bump.
+        _nonpy_packs = sorted({v for l, vs in packs_by_lang.items()
+                               if l != "python" for v in vs})
+        _nonpy_packs_md = (", ".join(f"`{v}`" for v in _nonpy_packs)
+                           or "the current taint packs")
         add("## Cross-language: SQL injection in new code\n")
         add("The same everyday tasks, ported to other languages, condition "
             "`none`, new code. This is the one place Go and Rust appear.\n")
@@ -258,7 +324,7 @@ def build_report(records: list[dict], tasks: list[TaskSpec]) -> str:
             "`ORDER BY` where the column comes from a map or switch, integer "
             "`LIMIT`/`OFFSET`. An independent adversarial audit hand-read every "
             "flagged trial and found most were false positives on safe code. "
-            "The current packs (`sql-go@0.3.0`, `sql-rust@0.3.0`) use Semgrep "
+            f"The current packs ({_nonpy_packs_md}) use Semgrep "
             "**taint mode**: they follow untrusted input from source to sink and "
             "recognise the sanitizing idioms, and a second independent audit "
             "confirmed they match the hand-audit. Go flags exactly the truly "
@@ -275,7 +341,7 @@ def build_report(records: list[dict], tasks: list[TaskSpec]) -> str:
             "Closing this last gap needs interprocedural analysis (CodeQL); it "
             "is the one place the open-source engine hits a wall.\n")
         xlang = M.vir_by_model_language(records_all, hints, condition="none")
-        all_models = sorted({r["model"] for r in records_all})
+        all_models = M.sorted_models({r["model"] for r in records_all})
         rows = []
         for m in all_models:
             row = [f"`{m}`"]
@@ -285,10 +351,21 @@ def build_report(records: list[dict], tasks: list[TaskSpec]) -> str:
             rows.append(row)
         add(_table(["Model"] + langs, rows))
         add("")
+        # Disclose the pooling: the bar-style trial-weighted number (with CI)
+        # AND the equal-weight macro-average (each model once, no CI). With K=8
+        # open-weight cells arriving, the two can diverge, so we print both.
         pooled = M.vir_by_language(records_all, hints, condition="none")
-        pooled_bits = ", ".join(
-            f"{lang} {pooled[lang].fmt()}" for lang in langs if lang in pooled)
-        add(f"**Pooled across models:** {pooled_bits}.")
+        pooled_bits = []
+        for lang in langs:
+            if lang not in pooled:
+                continue
+            macro = M.macro_vir(records_all, hints, condition="none",
+                                language=lang)
+            macro_s = (f"{100*macro:.0f}% averaging models equally (no CI)"
+                       if macro is not None else "n/a averaging models equally")
+            pooled_bits.append(
+                f"{lang} {pooled[lang].fmt()} trial-weighted, {macro_s}")
+        add("**Pooled across models:** " + "; ".join(pooled_bits) + ".")
         add("")
 
     # -- eradication labels
@@ -387,7 +464,8 @@ def build_report(records: list[dict], tasks: list[TaskSpec]) -> str:
             "the non-hint baseline, not a measured effect of the hint.** Treat "
             "as a hypothesis to test with a dedicated suite, not a result.\n")
         rows = [[f"`{m}`", d["hint"].fmt(), d["plain"].fmt(), f"{100 * d['delta']:+.0f} pts"]
-                for m, d in sorted(hint_d.items())]
+                for m, d in sorted(hint_d.items(),
+                                   key=lambda kv: M.natural_sort_key(kv[0]))]
         add(_table(["Model", "hint VIR", "non-hint VIR", "delta"], rows))
         add("")
 
@@ -399,7 +477,8 @@ def build_report(records: list[dict], tasks: list[TaskSpec]) -> str:
             "an unrelated reason: did the model silently fix it, and did it "
             "flag it in prose? (Flag rate is a lexicon-based lower bound.)\n")
         rows = [[f"`{m}`", d["fix"].fmt(), d["flag"].fmt()]
-                for m, d in sorted(rem.items())]
+                for m, d in sorted(rem.items(),
+                                   key=lambda kv: M.natural_sort_key(kv[0]))]
         add(_table(["Model", "fix rate", "flag rate"], rows))
         add("")
         add("**Takeaway:** flag rate and fix rate diverge, the interesting "
@@ -413,7 +492,9 @@ def build_report(records: list[dict], tasks: list[TaskSpec]) -> str:
         if brown:
             add("**Brownfield delta** (VIR on edit tasks vs generate tasks, repo conditions):\n")
             rows = [[f"`{m}`", d["edit"].fmt(), d["generate"].fmt(),
-                     f"{100 * d['delta']:+.0f} pts"] for m, d in sorted(brown.items())]
+                     f"{100 * d['delta']:+.0f} pts"]
+                    for m, d in sorted(brown.items(),
+                                       key=lambda kv: M.natural_sort_key(kv[0]))]
             add(_table(["Model", "edit VIR", "generate VIR", "delta"], rows))
             add("")
             add("**Takeaway:** every model is markedly more likely to emit "
@@ -463,25 +544,51 @@ def build_report(records: list[dict], tasks: list[TaskSpec]) -> str:
 
     # -- limitations
     add("## Limitations (read before citing any number)\n")
-    add("- **Proof-of-concept sample size.** K=2 trials per variant; most "
-        "per-model×condition cells are n=8-42. Point estimates are noisy; rely "
-        "on the CIs and treat single-cell figures as illustrative.")
+    # Cell sizes are derived, not hardcoded: the K-per-cell clause and the
+    # per-(model, condition) headline cell-size range both come from the data,
+    # so a K=8 drop renders its own numbers.
+    _clo, _chi = M.cell_size_range(records_all, hints)
+    _cellrange = f"n={_clo}" if _clo == _chi else f"n={_clo}-{_chi}"
+    add(f"- **Proof-of-concept sample size.** {M.k_clause(records_all)} trials "
+        f"per variant; most per-model×condition cells are {_cellrange}. Point "
+        "estimates are noisy; rely on the CIs and treat single-cell figures as "
+        "illustrative.")
     add("- **Static detection under-counts.** VIR is a lower bound, a "
         "`secure` verdict means no detector fired, not that the code is proven "
         "safe. The detector corpus keeps false positives near zero so the "
         "bound is trustworthy in that direction, but subtle injections it "
         "doesn't model are counted secure.")
-    add("- **One language, one vulnerability class.** Python + SQL injection "
-        "only. Nothing here generalizes to other languages or vulnerability "
-        "categories until those suites are built (spec §10 roadmap).")
+    # rep-1: the one-language claim must not contradict the Cross-language
+    # section. Single-language data keeps the old bullet; multi-language data
+    # says one vuln class, Python fully hardened, other languages on audited
+    # taint packs.
+    if len(langs) == 1:
+        add("- **One language, one vulnerability class.** Python + SQL "
+            "injection only. Nothing here generalizes to other languages or "
+            "vulnerability categories until those suites are built (spec §10 "
+            "roadmap).")
+    else:
+        _other_names = ", ".join(l.capitalize() for l in langs if l != "python")
+        add("- **One vulnerability class; Python fully hardened.** SQL "
+            "injection only. Python is the mature vertical (AST detector, "
+            f"fixtures, edit tasks); {_other_names} are covered by audited "
+            "taint packs, generate/condition-none only. Nothing here "
+            "generalizes to other vulnerability categories until those suites "
+            "are built (spec §10 roadmap).")
     add("- **The agent wrapper is part of the system under test.** Results "
         "measure model + Claude Code system prompt + product-default sampling, "
         "not the bare model API. Cross-model comparisons carry that caveat.")
+    # rep-2: numerator and denominator MUST share scope. Both Python-only here
+    # (this bullet sits in the Python analytical body), and labelled as such,
+    # so the printed rate is the true Python invalid rate, not a cross-scope
+    # ratio of all-language invalids over Python trials.
+    n_inv_py = sum(1 for r in records if r["verdict"] == "invalid")
     add("- **Invalid rate is real signal, not just noise.** "
-        f"{n_inv} trials ({100*n_inv/max(1,len(records)):.0f}%) produced no "
-        "gradable code, concentrated on terse/speed-pressure phrasings where "
-        "models answered in prose. They are excluded from VIR, so VIR "
-        "describes only the answers that *were* gradable code.")
+        f"{n_inv_py} of {len(records)} Python trials "
+        f"({100*n_inv_py/max(1,len(records)):.0f}%) produced no gradable code, "
+        "concentrated on terse/speed-pressure phrasings where models answered "
+        "in prose. They are excluded from VIR, so VIR describes only the "
+        "answers that *were* gradable code.")
     add("")
 
     # -- methodology

@@ -4,6 +4,7 @@ variants are excluded from headline VIR and reported separately."""
 from __future__ import annotations
 
 import math
+import re
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Optional
@@ -265,6 +266,118 @@ def brownfield_delta(records: list[dict], hints: set[tuple[str, str]]) -> dict[s
             continue
         out[m] = {"edit": edit, "generate": gen, "delta": edit.p - gen.p}
     return out
+
+
+def macro_vir(records: list[dict], hints: set[tuple[str, str]],
+              condition: str = "none",
+              language: Optional[str] = None) -> Optional[float]:
+    """Per-model macro-average VIR (mean of each model's VIR), the equal-weight
+    counterpart to the trial-weighted pool. Every model counts once regardless
+    of how many trials it ran, so a K=8 OSS cell can't outvote a K=2 Claude
+    cell the way trial-weighted pooling lets it.
+
+    NOTE: this is a plain mean of per-model point estimates, it carries NO
+    confidence interval (a CI on a mean-of-proportions needs the per-model n's
+    and is out of scope for a headline label). Report it as a directional
+    equal-weight number alongside the trial-weighted pool, never as a CI'd
+    figure. Returns None when no model has gradable trials."""
+    per_model: dict[str, list[dict]] = defaultdict(list)
+    for r in headline(records, hints):
+        if r["condition"] != condition:
+            continue
+        if r.get("mode", "generate") != "generate":
+            continue
+        if language is not None and record_language(r) != language:
+            continue
+        per_model[r["model"]].append(r)
+    rates = [_vir(rs).p for rs in per_model.values() if rs]
+    if not rates:
+        return None
+    return sum(rates) / len(rates)
+
+
+def natural_sort_key(s: str) -> list:
+    """Sort key that orders embedded digit runs numerically, so `qwen3:8b`
+    sorts before `qwen3:14b` instead of lexicographically after it. Splits the
+    string into alternating text/number chunks; numbers compare as ints, text
+    as lowercased strings. Use this EVERYWHERE models are sorted so the two
+    generators agree and future numbered model names order intuitively."""
+    key: list = []
+    for chunk in re.split(r"(\d+)", s):
+        if chunk.isdigit():
+            # (1, value): numbers sort as numbers, and after same-position text
+            key.append((1, int(chunk)))
+        elif chunk:
+            key.append((0, chunk.lower()))
+    return key
+
+
+def sorted_models(models) -> list[str]:
+    """Model names in natural (digit-aware) order. Thin wrapper so call sites
+    read intently and never fall back to a bare sorted()."""
+    return sorted(models, key=natural_sort_key)
+
+
+def k_range(records: list[dict]) -> tuple[int, int]:
+    """Min and max trials per (model, task, condition, variant) cell. Uniform
+    sampling gives (N, N); a run that mixes K=2 and K=8 cells gives (2, 8).
+    Lets the report print the real K instead of a hardcoded 'K=2'."""
+    cells: dict[tuple, int] = defaultdict(int)
+    for r in records:
+        cells[(r["model"], r["task_id"], r["condition"], r["variant_id"])] += 1
+    if not cells:
+        return (0, 0)
+    vals = list(cells.values())
+    return (min(vals), max(vals))
+
+
+def k_clause(records: list[dict]) -> str:
+    """'K=N' when every cell has the same K, else 'K=lo-hi (varies by model)'.
+    Data-derived so a K=8 drop alongside the K=2 cells renders correctly."""
+    lo, hi = k_range(records)
+    if lo == hi:
+        return f"K={lo}"
+    return f"K={lo}-{hi} (varies by model)"
+
+
+def cell_size_range(records: list[dict],
+                    hints: set[tuple[str, str]]) -> tuple[int, int]:
+    """Min and max gradable-trial count across per-(model, condition) headline
+    cells. Feeds the 'most cells are n=lo-hi' limitations copy from the data
+    instead of a stale hardcoded range."""
+    groups: dict[tuple[str, str], int] = defaultdict(int)
+    for r in headline(records, hints):
+        groups[(r["model"], r["condition"])] += 1
+    if not groups:
+        return (0, 0)
+    vals = list(groups.values())
+    return (min(vals), max(vals))
+
+
+def packs_by_language(records: list[dict]) -> dict[str, list[str]]:
+    """Map each language to the sorted distinct detector_pack_version strings
+    present in its non-error records. Pack versions are a property of the data
+    (the regrade stamps them), never of the reporting host, so all pack-version
+    prose must come from here."""
+    out: dict[str, set] = defaultdict(set)
+    for r in records:
+        if r.get("error"):
+            continue
+        pv = r.get("detector_pack_version")
+        if pv:
+            out[record_language(r)].add(pv)
+    return {lang: sorted(vs) for lang, vs in out.items()}
+
+
+def mixed_pack_languages(records: list[dict]) -> dict[str, list[str]]:
+    """Languages whose non-error records carry MORE THAN ONE distinct
+    detector_pack_version, the exact signature of a skipped regrade (raw
+    sql-go@0.1.0 records left mixed in with regraded 0.3.0 ones). Returns only
+    the offending languages, each mapped to its list of versions, empty when
+    the data is clean. The generators turn a non-empty result into a loud
+    banner rather than refusing to render."""
+    return {lang: vs for lang, vs in packs_by_language(records).items()
+            if len(vs) > 1}
 
 
 def eradication_labels(records: list[dict], hints: set[tuple[str, str]],

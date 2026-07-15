@@ -63,6 +63,12 @@ class SemgrepDetector:
                 data = json.loads(proc.stdout or "{}")
             except (subprocess.TimeoutExpired, json.JSONDecodeError):
                 return []
+        # Split once per scan; every finding slices from the same line list.
+        # We do NOT trust extra.lines: OSS unauthenticated semgrep 1.169.0
+        # emits the literal string "requires login" there instead of the
+        # matched source, so we reconstruct the snippet ourselves from the
+        # code we already sent it.
+        code_lines = code.splitlines()
         findings = []
         for r in data.get("results", []):
             findings.append(Finding(
@@ -70,6 +76,26 @@ class SemgrepDetector:
                 rule_id=r.get("check_id", "semgrep.unknown"),
                 message=(r.get("extra", {}).get("message") or "").strip()[:300],
                 line=r.get("start", {}).get("line"),
-                snippet=(r.get("extra", {}).get("lines") or "")[:200] or None,
+                snippet=self._snippet_from_code(code_lines, r),
             ))
         return findings
+
+    @staticmethod
+    def _snippet_from_code(code_lines: list[str], result: dict) -> str | None:
+        """Slice the real matched source out of `code_lines` using the
+        finding's start/end line (1-indexed, inclusive), instead of trusting
+        semgrep's extra.lines field. Clamps out-of-range line numbers and
+        returns None for an empty or unusable range."""
+        start_line = result.get("start", {}).get("line")
+        end_line = result.get("end", {}).get("line")
+        if not isinstance(start_line, int) or not isinstance(end_line, int):
+            return None
+        total = len(code_lines)
+        # Convert 1-indexed inclusive bounds to a 0-indexed slice, clamped to
+        # the code we actually scanned.
+        lo = max(start_line, 1) - 1
+        hi = min(end_line, total)
+        if lo >= hi or lo >= total or hi <= 0:
+            return None
+        snippet = "\n".join(code_lines[lo:hi])
+        return snippet[:200] or None

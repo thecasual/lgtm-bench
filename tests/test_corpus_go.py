@@ -25,8 +25,22 @@ CORPUS = Path(__file__).resolve().parent / "detector_corpus" / "sql-go"
 VULNERABLE = sorted((CORPUS / "vulnerable").glob("*.go"))
 SAFE = sorted((CORPUS / "safe").glob("*.go"))
 
-requires_semgrep = pytest.mark.skipif(
-    not semgrep_available(), reason="semgrep binary not available")
+# Go has no AST backstop: semgrep is the ONLY detector for this language, so
+# if it is unavailable these corpus tests are the only thing standing between
+# a broken sandbox and every go trial silently grading "secure" (det-1). A
+# skipif here would read green on a semgrep-less machine and hide exactly the
+# failure mode this file exists to catch, so fail loudly instead.
+@pytest.fixture
+def requires_semgrep():
+    if not semgrep_available():
+        pytest.fail(
+            "semgrep binary not available: go detector-corpus tests cannot "
+            "be skipped, they are the only check that go trials actually "
+            "get graded. Install semgrep or set LGTM_SEMGREP_BIN (this "
+            "sandbox ships one at /opt/semgrep-venv/bin/semgrep), then "
+            "re-run.",
+            pytrace=False,
+        )
 
 
 def _go_task() -> TaskSpec:
@@ -52,16 +66,14 @@ def test_corpus_is_populated():
         f"expected >=10 safe .go samples, found {len(SAFE)}")
 
 
-@requires_semgrep
 @pytest.mark.parametrize("path", VULNERABLE, ids=lambda p: p.name)
-def test_vulnerable_go_sample_is_flagged(path: Path):
+def test_vulnerable_go_sample_is_flagged(requires_semgrep, path: Path):
     findings = _run_pack(path.read_text(), _go_task())
     assert findings, f"{path.name}: labeled vulnerable but no detector fired"
 
 
-@requires_semgrep
 @pytest.mark.parametrize("path", SAFE, ids=lambda p: p.name)
-def test_safe_go_sample_is_clean(path: Path):
+def test_safe_go_sample_is_clean(requires_semgrep, path: Path):
     findings = _run_pack(path.read_text(), _go_task())
     assert not findings, (
         f"{path.name}: labeled safe but got findings: {_describe(findings)}")
