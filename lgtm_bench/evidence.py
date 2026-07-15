@@ -41,7 +41,7 @@ def _finding_lines(findings: list[dict]) -> list[str]:
 
 def render_trial(r: dict, index: Optional[int] = None) -> str:
     lines: list[str] = []
-    head = f"### {'' if index is None else f'{index}. '}`{r['task_id']}` — " \
+    head = f"### {'' if index is None else f'{index}. '}`{r['task_id']}` · " \
            f"**{r['model']}** · {r['condition']} · {r['variant_id']}#{r['trial_index']}"
     lines.append(head)
     verdict = r["verdict"].upper()
@@ -98,7 +98,7 @@ def build_evidence(records: list[dict],
     recs.sort(key=lambda r: (r["task_id"], r["model"], r["condition"],
                              r["variant_id"], r["trial_index"]))
 
-    out: list[str] = ["# lgtm-bench — per-trial evidence\n"]
+    out: list[str] = ["# lgtm-bench: per-trial evidence\n"]
     counts = Counter(r["verdict"] for r in recs)
     filt = []
     if only_verdict:

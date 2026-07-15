@@ -3,7 +3,8 @@
 - **Harness:** 0.1.0 · **Runs:** 2026-07-13T03-40-43Z, 2026-07-13T03-55-29Z, 2026-07-13T14-33-26Z, 2026-07-13T14-41-21Z, 2026-07-14T15-26-28Z, 2026-07-14T15-38-02Z, 2026-07-14T20-11-57Z
 - **Trials:** 1280 total across 3 language(s) (python, go, rust); 159 invalid (0 runner errors, 159 genuinely ungradable output)
 - **Models:** claude-fable-5, claude-haiku-4-5, claude-opus-4-1, claude-opus-4-8, claude-sonnet-4-5, claude-sonnet-5, llama3.2:3b, qwen3:8b
-- **Detector packs:** sql-go@0.3.0, sql-rust@0.3.0, sql@0.9.0 · semgrep active
+- **Detector packs (read from the records, set by the offline grade):** sql-go@0.3.0, sql-rust@0.3.0, sql@0.9.0
+- **Semgrep on this reporting host:** installed. This affects only re-grading here, not the verdicts above (those were graded offline). Python carries an AST backstop, so its verdicts reproduce without semgrep; Go and Rust have no backstop and require semgrep to re-grade.
 - **Fixture version:** 1
 
 **Reproduce this report** from the published raw data with no model calls, or run a fresh benchmark, via [docs/REPRODUCE.md](REPRODUCE.md). How verdicts are decided and validated: [docs/METHODOLOGY.md](METHODOLOGY.md).
@@ -17,7 +18,7 @@ Plain-language summary; the tables below have the numbers and CIs. *VIR* = vulne
 - **Editing existing vulnerable code is where risk concentrates.** Of the 4 of 8 models run on edit tasks, every one is more likely to emit vulnerable code when *editing* an already-vulnerable function than when writing new code (+12 to +44 pts), they copy the surrounding insecure style. See **Brownfield remediation**.
 - **Some models at least flag what they don't fix, and it varies by model, not cleanly by size.** On those same edits, `claude-fable-5`, `claude-sonnet-5` flagged the pre-existing vulnerability in prose most of the time, even when leaving it in place; `claude-haiku-4-5`, `claude-sonnet-4-5` mostly stayed silent. (All n=8/model, directional.) See **Brownfield remediation** (fix vs flag).
 - **Phrasing matters, and terse prompts often yield no code at all.** 62/640 answers were ungradable (mostly prose on terse/speed-pressure variants), and several tasks flip between safe and vulnerable on wording alone. See **Prompt sensitivity**.
-- **Go and Rust look like Python once the detector can see dataflow.** Pooled new-code rates read python 15%, go 11%, rust 5%. An earlier pattern-based grader put Go and Rust ~4x higher, but an independent adversarial audit showed that gap was a detector artifact: safe allowlist and placeholder idioms misread as injections. The v0.3 taint packs match the hand-audit, and the corrected picture is the same as Python: frontier models sit near 0% in every language, the weak and open-weight models carry the double-digit rates. (Rust is a lower bound; see **Cross-language**.)
+- **Go and Rust look like Python once the detector can see dataflow.** Pooled new-code rates read python 15% trial-weighted / 12% averaging models equally, go 11% trial-weighted / 10% averaging models equally, rust 5% trial-weighted / 4% averaging models equally. An earlier pattern-based grader put Go and Rust ~4x higher, but an independent adversarial audit showed that gap was a detector artifact: safe allowlist and placeholder idioms misread as injections. The current taint packs match the hand-audit, and the corrected picture is the same as Python: frontier models sit near 0% in every language, the weak and open-weight models carry the double-digit rates. (Rust is a lower bound; see **Cross-language**.)
 - **Read this as a proof-of-concept, not a leaderboard.** This run covers **1 of the 6** pre-registered vulnerability hypotheses (SQL injection only), 8 models, 2 of them open-weight (`llama3.2:3b`, `qwen3:8b`), so the cross-vendor "generation gap" question is only lightly probed, 3 languages, only Python fully hardened, K=2 trials/cell. Rely on the CIs. See **Limitations**.
 
 ## What this measures
@@ -26,7 +27,7 @@ lgtm-bench asks each model everyday coding questions ("write a function that loo
 
 All rates are VIR over non-invalid trials, excluding safety-hint variants; ranges are **Wilson 95% CIs**. This is a proof-of-concept run at small per-cell samples (K=2 trials): **aggregates are directional, individual cells are illustrative, and every CI should be read before any single point estimate.** A `secure` verdict means no detector fired, not proven safety, so VIR is a lower bound.
 
-**Grader credibility:** the detector was hardened across an adversarial false-positive/false-negative audit, independent models re-checking every flagged trial and a sample of unflagged ones, each candidate defect reproduced before it counted. Concretely, the flagged-trial count fell **77 → 40** as false positives (safe code wrongly flagged) were removed, then rose **40 → 87** as genuine false negatives (real injections graded secure) were caught, both directions checked. Each confirmed misgrade became a fix plus a permanent regression sample in `tests/detector_corpus/` (now 60+ samples). Every vulnerable verdict in this report was then hand-confirmed against its raw output. See `docs/METHODOLOGY.md` for the full audit trail and `docs/poc-evidence.md` for per-trial prompt→output→findings→verdict.
+**Grader credibility:** the detector was hardened across an adversarial false-positive/false-negative audit, independent models re-checking every flagged trial and a sample of unflagged ones, each candidate defect reproduced before it counted. Concretely, on the 440-trial Claude Python population audited at `sql@0.9.0`, the flagged-trial count fell **77 → 40** as false positives (safe code wrongly flagged) were removed, then rose **40 → 48** as genuine false negatives (real injections graded secure) were caught, both directions checked. Those figures are the frozen audit result for that population, not a live count of the current run. Each confirmed misgrade became a fix plus a permanent regression sample in `tests/detector_corpus/` (now 60+ samples). Every vulnerable verdict in that audited population was hand-confirmed against its raw output; trials added since (new models, new languages) are graded by the same audited detectors but not individually re-read. See `docs/METHODOLOGY.md` for the full audit trail and `docs/poc-evidence.md` for per-trial prompt→output→findings→verdict.
 
 ## Headline: VIR by model × condition
 
@@ -62,7 +63,7 @@ The same everyday tasks, ported to other languages, condition `none`, new code. 
 | `llama3.2:3b` | 26% (18-36, n=88) | 20% (11-35, n=44) | 11% (4-25, n=36) |
 | `qwen3:8b` | 20% (13-30, n=85) | 20% (12-32, n=60) | 11% (5-21, n=56) |
 
-**Pooled across models:** python 15% (12-19, n=418), go 11% (8-15, n=286), rust 5% (3-8, n=257).
+**Pooled across models:** python 15% (12-19, n=418) trial-weighted, 12% averaging models equally (no CI); go 11% (8-15, n=286) trial-weighted, 10% averaging models equally (no CI); rust 5% (3-8, n=257) trial-weighted, 4% averaging models equally (no CI).
 
 ## Category verdicts (pre-registered rule, §1 of the spec)
 
@@ -245,11 +246,11 @@ python -c "import json,glob,sys; [print(json.dumps(json.loads(l),indent=2)) for 
 
 ## Limitations (read before citing any number)
 
-- **Proof-of-concept sample size.** K=2 trials per variant; most per-model×condition cells are n=8-42. Point estimates are noisy; rely on the CIs and treat single-cell figures as illustrative.
+- **Proof-of-concept sample size.** K=2 trials per variant; most per-model×condition cells are n=16-201. Point estimates are noisy; rely on the CIs and treat single-cell figures as illustrative.
 - **Static detection under-counts.** VIR is a lower bound, a `secure` verdict means no detector fired, not that the code is proven safe. The detector corpus keeps false positives near zero so the bound is trustworthy in that direction, but subtle injections it doesn't model are counted secure.
-- **One language, one vulnerability class.** Python + SQL injection only. Nothing here generalizes to other languages or vulnerability categories until those suites are built (spec §10 roadmap).
+- **One vulnerability class; Python fully hardened.** SQL injection only. Python is the mature vertical (AST detector, fixtures, edit tasks); Go, Rust are covered by audited taint packs, generate/condition-none only. Nothing here generalizes to other vulnerability categories until those suites are built (spec §10 roadmap).
 - **The agent wrapper is part of the system under test.** Results measure model + Claude Code system prompt + product-default sampling, not the bare model API. Cross-model comparisons carry that caveat.
-- **Invalid rate is real signal, not just noise.** 159 trials (25%) produced no gradable code, concentrated on terse/speed-pressure phrasings where models answered in prose. They are excluded from VIR, so VIR describes only the answers that *were* gradable code.
+- **Invalid rate is real signal, not just noise.** 62 of 640 Python trials (10%) produced no gradable code, concentrated on terse/speed-pressure phrasings where models answered in prose. They are excluded from VIR, so VIR describes only the answers that *were* gradable code.
 
 ## Methodology notes
 
