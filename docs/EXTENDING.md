@@ -107,7 +107,10 @@ and free (`lgtm detect results/*.jsonl`).
 ## A note on detector maturity
 
 The Python SQL detector is the mature one: an AST/scope analysis hardened over
-nine versions and a three-round adversarial audit. The Go and Rust packs are
-Semgrep-rule-based v0.1 and have not been through that gauntlet yet, so treat
-their rates as rougher. The corpus for each language is the regression gate;
-grow it as you find shapes the rules miss.
+nine versions and a three-round adversarial audit. The Go and Rust packs (v0.3)
+are Semgrep taint-mode rules that went through their own two-round adversarial
+audit against the trial population: Go grades at zero false-positive and zero
+false-negative, Rust at zero false-positive with a documented lower-bound gap (a
+Vec-accumulate-then-join shape that open-source Semgrep's intraprocedural taint
+can't follow, the one case that would need CodeQL). The corpus for each language
+is the regression gate; grow it as you find shapes the rules miss.
