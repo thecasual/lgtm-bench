@@ -8,7 +8,7 @@ to rebuild everything from scratch. Normal runs write to `results/` (gitignored)
 these are a curated snapshot.
 
 **Provenance:** run this to print the exact date range, run ids, model list,
-detector pack version, and trial count for the snapshot in this directory —
+detector pack version, and trial count for the snapshot in this directory,
 so any reader can confirm what they're looking at:
 
     python3 -c "import json,glob,collections as C; \
@@ -19,7 +19,7 @@ so any reader can confirm what they're looking at:
       print('pack',sorted({r.get('detector_pack_version') for r in R})); \
       print('verdicts',dict(C.Counter(r['verdict'] for r in R)))"
 
-- `run-*.regraded.jsonl` — one JSON object per trial. Key fields:
+- `run-*.regraded.jsonl`: one JSON object per trial. Key fields:
   `model`, `task_id`, `mode`, `condition`, `variant_id`, `trial_index`,
   `prompt` (exact text sent), `raw_output` (full model response),
   `extracted_code` (what the detectors graded), `verdict`
@@ -27,6 +27,34 @@ so any reader can confirm what they're looking at:
   `message`, `line`, `snippet`), `fixed_existing`/`flagged_existing`
   (edit tasks), `timing_ms`, `error` (runner errors, if any),
   `detector_pack_version`, `harness_version`.
+
+**Naming convention:** a run first lands as `run-<hash>.jsonl` (raw model
+output, ungraded). Once `lgtm detect` grades it, the graded copy is committed
+as `run-<hash>.regraded.jsonl` and the raw file is removed from this
+directory, so every file here is always graded under a current detector pack,
+never a stale raw dump. `<hash>` is the run's config hash, not a content hash,
+so it stays stable across regrades of the same run.
+
+## Files in this snapshot
+
+Five runs, 1280 trials total, all regraded under the current detector packs
+(`sql@0.9.0` for Python, `sql-go@0.3.0` and `sql-rust@0.3.0` for Go/Rust) as of
+this session. Every file below is `mode: generate` except
+`run-cdfef7c4b0a3.regraded.jsonl`, which also carries the `mode: edit`
+remediation trials.
+
+| File | Run id(s) | Models | Language(s) / condition | Trials |
+|---|---|---|---|---|
+| `run-f10fee11b727.regraded.jsonl` | `2026-07-13T03-40-43Z` | claude-fable-5, claude-opus-4-8, claude-opus-4-1, claude-sonnet-5, claude-sonnet-4-5, claude-haiku-4-5 | Python SQL, `condition: none` | 312 |
+| `run-cdfef7c4b0a3.regraded.jsonl` | `2026-07-13T03-55-29Z`, `2026-07-13T14-33-26Z`, `2026-07-13T14-41-21Z` | claude-fable-5, claude-sonnet-5, claude-sonnet-4-5, claude-haiku-4-5 | Python SQL, `clean-repo` + `dirty-repo` (generate and edit tasks) | 128 |
+| `run-e8a4541a372d.regraded.jsonl` | `2026-07-14T15-26-28Z` | llama3.2:3b, qwen3:8b | Python SQL, `condition: none` (Ollama runner) | 200 |
+| `run-0b9839185649.regraded.jsonl` | `2026-07-14T15-38-02Z` | claude-fable-5, claude-opus-4-8, claude-opus-4-1, claude-sonnet-5, claude-sonnet-4-5, claude-haiku-4-5 | Go + Rust SQL, `condition: none` | 384 |
+| `run-b2c3d1212dc2.regraded.jsonl` | `2026-07-14T20-11-57Z` | llama3.2:3b, qwen3:8b | Go + Rust SQL, `condition: none` (Ollama runner) | 256 |
+
+That's 8 distinct models across the snapshot (6 Claude, 2 open-weight), matching the
+`docs/poc-report.md` totals. Run the provenance snippet above at any time to confirm these
+numbers against whatever is actually on disk, since this table is a point-in-time summary
+and the directory listing is the source of truth.
 
 ## Read it as prose instead
 

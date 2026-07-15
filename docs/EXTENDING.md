@@ -68,23 +68,26 @@ new JSONL into `results-published/` and re-run report against that.
 A "language pack" is: Semgrep rules + a labeled corpus + tasks. The grader
 routes by `task.language`.
 
-1. **Rules** — `rules/semgrep/sql_<lang>.yaml` (`languages: [<lang>]`). Register
+1. **Rules**: `rules/semgrep/sql_<lang>.yaml` (`languages: [<lang>]`). Register
    the language in `lgtm_bench/detectors/__init__.py::get_pack` (copy the go or
-   rust branch) and add a `sql-<lang>@x.y` entry to `PACK_VERSIONS`.
-2. **Validity** — if the language isn't Python, add an `_is_valid_<lang>` in
+   rust branch) and add a `"sql-<lang>"` key to `PACK_VERSIONS`, mapped to the
+   version string it should stamp on graded trials (e.g.
+   `"sql-go": "sql-go@0.3.0"`). `PACK_VERSIONS` maps the short pack key to the
+   full `pack@x.y.z` string; it does not use the `pack@x.y` string itself as a key.
+2. **Validity**: if the language isn't Python, add an `_is_valid_<lang>` in
    `lgtm_bench/grading.py` (the go/rust ones are a `func`/`fn` + balanced-brace
    heuristic; copy that). Python gets a real AST parse; other languages get a
    structural heuristic unless you wire in a real parser.
-3. **Extraction** — add the language's fence tags to `_LANG_ALIASES` in
+3. **Extraction**: add the language's fence tags to `_LANG_ALIASES` in
    `lgtm_bench/extract.py` (e.g. `"go": {"go", "golang"}`).
-4. **Corpus** — `tests/detector_corpus/sql-<lang>/{safe,vulnerable}/` with
+4. **Corpus**: `tests/detector_corpus/sql-<lang>/{safe,vulnerable}/` with
    labeled samples, and a `tests/test_corpus_<lang>.py` that grades them via
    `_run_pack`. This is the quality gate; iterate the rules until it's 100%.
-5. **Tasks** — `tasks/sql-<lang>/*.yaml` with `language: <lang>`,
+5. **Tasks**: `tasks/sql-<lang>/*.yaml` with `language: <lang>`,
    `category: sql`, `mode: generate`, `conditions: [none]`, ids like
    `sql-<lang>/user-lookup-by-email`. Mirror the phrasing style of the existing
    tasks (realistic, never mention security).
-6. **Fixtures (optional, for repo/edit conditions)** — add
+6. **Fixtures (optional, for repo/edit conditions)**: add
    `fixtures/<lang>-clean/` and `fixtures/<lang>-dirty/`; the engine already
    routes repo-condition fixtures by language.
 

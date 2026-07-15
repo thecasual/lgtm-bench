@@ -1,20 +1,20 @@
 # lgtm-bench
 
 A benchmark for measuring **how often LLMs introduce security vulnerabilities when handling
-ordinary developer requests** — the code that "looks good to me" in review but carries a
+ordinary developer requests**: the code that "looks good to me" in review but carries a
 latent bug.
 
 lgtm-bench measures five things:
 
-1. **Vulnerability introduction rate** — asked a benign question ("write a function that
+1. **Vulnerability introduction rate**: asked a benign question ("write a function that
    fetches a user by email"), how often does the model produce vulnerable code?
-2. **Sensitivity & reproducibility** — how much does that rate change across paraphrasings
+2. **Sensitivity & reproducibility**: how much does that rate change across paraphrasings
    of the same request, and across repeated runs of the identical prompt?
-3. **Context contamination** — does the model get worse when the repo it works in already
+3. **Context contamination**: does the model get worse when the repo it works in already
    contains insecure code?
-4. **Remediation behavior** — when editing existing vulnerable code for an unrelated reason,
+4. **Remediation behavior**: when editing existing vulnerable code for an unrelated reason,
    does the model silently fix the issue, flag it, ignore it, or make it worse?
-5. **Model-generation gap** — are these rates a property of LLMs in general, or only of the
+5. **Model-generation gap**: are these rates a property of LLMs in general, or only of the
    newest frontier models? (frontier vs. older vs. open-weight)
 
 The end deliverable is a data-backed **"State of Vibe Coding"** write-up testing six
@@ -24,20 +24,20 @@ plausibly still *introduce* (insecure randomness for secrets, path traversal, co
 injection).
 
 The first vertical is **SQL query generation / SQL injection** (Python + sqlite/psycopg).
-Detection is fully static (Semgrep + AST/sqlglot) — deterministic and free to run. Model
+Detection is fully static (Semgrep + AST/sqlglot): deterministic and free to run. Model
 calls ride an Anthropic subscription via Claude Code headless mode.
 
-The models in the published run: **`claude-fable-5`** (a fast Claude model — the smaller
+The models in the published run: **`claude-fable-5`** (a fast Claude model, the smaller
 sibling in this generation, used here as the frugal default), **`claude-opus-4-8`** and
 **`claude-opus-4-1`** (frontier), **`claude-sonnet-5`** and **`claude-sonnet-4-5`**
 (mid-tier, current and prior generation), **`claude-haiku-4-5`** (small/fast).
 
 **Read next:**
-- [docs/poc-report.md](docs/poc-report.md) — the benchmark report (findings, tables, limitations)
-- [docs/METHODOLOGY.md](docs/METHODOLOGY.md) — how verdicts are decided and how the grader was validated
-- [docs/REPRODUCE.md](docs/REPRODUCE.md) — reproduce the report from scratch, plus a glossary
-- [docs/TECH_SPEC.md](docs/TECH_SPEC.md) — the full design
-- [docs/poc-evidence.md](docs/poc-evidence.md) — every trial: prompt → output → findings → verdict
+- [docs/poc-report.md](docs/poc-report.md): the benchmark report (findings, tables, limitations)
+- [docs/METHODOLOGY.md](docs/METHODOLOGY.md): how verdicts are decided and how the grader was validated
+- [docs/REPRODUCE.md](docs/REPRODUCE.md): reproduce the report from scratch, plus a glossary
+- [docs/TECH_SPEC.md](docs/TECH_SPEC.md): the full design
+- [docs/poc-evidence.md](docs/poc-evidence.md): every trial: prompt → output → findings → verdict
 
 ## Quick start
 
@@ -49,7 +49,7 @@ python -m pytest tests/ -q  # detector corpus must pass 100%
 ```
 
 The default runner shells out to **Claude Code headless** (`claude -p`), so model calls ride
-your existing Claude subscription — install and log in to the `claude` CLI first. No API key
+your existing Claude subscription: install and log in to the `claude` CLI first. No API key
 is used or needed.
 
 ### Run a benchmark
@@ -105,14 +105,14 @@ to `results/run-<config-hash>.jsonl`). Useful flags: `--concurrency N` (default 
 ```bash
 lgtm report results/*.jsonl --out report.md   # leaderboard, deltas, CIs, examples
 lgtm detect results/run-….jsonl               # re-grade stored outputs after a detector
-                                              # upgrade — no model calls, no re-spend
+                                              # upgrade: no model calls, no re-spend
 ```
 
 ### Audit the results yourself
 
 Every number in the report traces back to per-trial records. To read the full
-evidence — the exact prompt, the raw model output, the code the harness
-extracted, each scan finding, and the verdict:
+evidence (the exact prompt, the raw model output, the code the harness
+extracted, each scan finding, and the verdict):
 
 ```bash
 lgtm evidence results/*.jsonl --out evidence.md                 # every trial
