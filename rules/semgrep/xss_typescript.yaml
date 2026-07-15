@@ -209,6 +209,38 @@ rules:
         pattern: escapeHtml(...)
       - by-side-effect: false
         pattern: he.encode(...)
+      # A bare `escape(...)` call: the HTML-escaping helper exported by the
+      # `html-escaper` / `escape-html` packages (`import { escape } from
+      # "html-escaper"`). Same escaping role as escapeHtml/he.encode, just a
+      # shorter imported name.
+      - by-side-effect: false
+        pattern: escape(...)
+      # Per-element escaped `.map(cb).join(...)`: an array is rendered by
+      # mapping each element to a template-literal row whose ONLY
+      # interpolations go through a recognized HTML escaper, then joined into
+      # one string. Every value that reaches the sink text is escaped, so the
+      # joined result is safe even though the array itself carries taint.
+      # Restricting the callback body to an escaper-only interpolation keeps a
+      # genuinely-unescaped `.map(r => `<li>${r.title}</li>`).join("")` still
+      # flagging (it does not match this sanitizer).
+      - by-side-effect: false
+        patterns:
+          - pattern: $ARR.map(($E) => $BODY).join(...)
+          - metavariable-pattern:
+              metavariable: $BODY
+              pattern-either:
+                - pattern: "`...${escapeHtml(...)}...`"
+                - pattern: "`...${he.encode(...)}...`"
+                - pattern: "`...${DOMPurify.sanitize(...)}...`"
+                - pattern: "`...${escape(...)}...`"
+      # Inline entity-encoding replace-chain: a `.replace(/</g, "&lt;")` call
+      # (with any surrounding `&`/`>` replacements in the same chain) encodes
+      # the `<` that would otherwise open an injected tag in element-text
+      # context. The sanitizer clears taint only on the replace-chain
+      # expression itself, so code that computes an escaped value but then
+      # sinks the ORIGINAL unescaped variable still flags (no false negative).
+      - by-side-effect: false
+        pattern: $X.replace(/</g, "&lt;")
       - by-side-effect: false
         pattern: Number(...)
       - by-side-effect: false

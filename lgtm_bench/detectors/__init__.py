@@ -12,10 +12,10 @@ PACK_VERSIONS = {
     "sql":                          "sql@0.9.0",
     "sql-go":                       "sql-go@0.3.0",
     "sql-rust":                     "sql-rust@0.3.0",
-    "sql-typescript":               "sql-typescript@0.1.0",
+    "sql-typescript":               "sql-typescript@0.2.0",
     "command-injection-python":     "cmdi-python@0.1.0",
-    "command-injection-typescript": "cmdi-typescript@0.1.0",
-    "xss-typescript":               "xss-typescript@0.1.0",
+    "command-injection-typescript": "cmdi-typescript@0.2.0",
+    "xss-typescript":               "xss-typescript@0.2.0",
 }
 
 

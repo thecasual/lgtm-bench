@@ -250,6 +250,40 @@ rules:
                 ...
               }
           - pattern: $X
+      # Regex character-class allowlist guard: `/^[...]+$/.test(x)` (or `*`
+      # in place of `+`) anchored at both ends means the ENTIRE string must
+      # consist solely of characters drawn from the bracketed class - no
+      # shell metacharacters or whitespace can be present in a passing value,
+      # so the guarded value is exactly as safe as an array/Set membership
+      # allowlist. Both the positive-branch (`if ($RE.test($X)) { ...$X... }`)
+      # and negative-branch-returns-early (`if (!$RE.test($X)) { ... }
+      # ...$X...`) forms are covered, mirroring the includes()/has() guards
+      # above. Deliberately narrow: the metavariable-regex requires the regex
+      # literal's own source text to be `^[` ... `]` (one-or-more times a
+      # non-`]` char) `+`/`*` `$`, optionally followed by flags, so an
+      # un-anchored or non-character-class regex (e.g. `/^[a-z]/` with no
+      # trailing `$`, or `/.*allowed.*/`) is NOT treated as a sanitizer.
+      - by-side-effect: false
+        patterns:
+          - pattern-inside: |
+              if ($RE.test($X)) {
+                ...
+              }
+          - pattern: $X
+          - metavariable-regex:
+              metavariable: $RE
+              regex: ^/\^\[[^\]]+\][+*]\$/[a-zA-Z]*$
+      - by-side-effect: false
+        patterns:
+          - pattern-inside: |
+              if (!$RE.test($X)) {
+                ...
+              }
+              ...
+          - pattern: $X
+          - metavariable-regex:
+              metavariable: $RE
+              regex: ^/\^\[[^\]]+\][+*]\$/[a-zA-Z]*$
     pattern-propagators: &propagators
       # `let cmd = "..."; cmd += $Y;` accumulation.
       - pattern: $X += $Y

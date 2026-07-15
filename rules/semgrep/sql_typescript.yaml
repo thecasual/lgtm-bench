@@ -41,6 +41,16 @@ rules:
   #                "a": ...use $X... }` allowlist. In every one of these
   #                shapes $X is constrained to one of a fixed, literal set
   #                of safe values before it can reach the query text.
+  #              - the same three membership-guard shapes, spelled with a
+  #                `Set`'s `.has(...)` instead of an array's `.includes
+  #                (...)` (`const ALLOWED = new Set([...]);` followed by
+  #                `ALLOWED.has($X) ? $X : $DEFAULT`, `if (ALLOWED.has($X))
+  #                { ...use $X... }`, or `if (!ALLOWED.has($X)) { throw/
+  #                return; } ...use $X...`): `Set.has` is the same
+  #                membership check as `Array.includes`, so it clears $X the
+  #                same way. Ported verbatim from the cmdi TypeScript pack
+  #                (rules/semgrep/cmdi_typescript.yaml), which already
+  #                covers this idiom for the command-injection sinks.
   #            (A `switch (sortBy) { case "x": query = "..." }` allowlist
   #            that assigns a *literal* into the query needs no explicit
   #            sanitizer: the tainted variable is never itself assigned into
@@ -189,6 +199,27 @@ rules:
         patterns:
           - pattern-inside: |
               if (!$ALLOWED.includes($X)) {
+                ...
+              }
+              ...
+          - pattern: $X
+      # Set-based allowlist: `const ALLOWED = new Set([...]); if
+      # (!ALLOWED.has(x)) throw;` (and the positive-branch / ternary
+      # mirrors). `Set.has` is the same membership check as `Array.includes`,
+      # so the same three guard shapes clear the value.
+      - by-side-effect: false
+        pattern: "$ALLOWED.has($X) ? $X : $DEFAULT"
+      - by-side-effect: false
+        patterns:
+          - pattern-inside: |
+              if ($ALLOWED.has($X)) {
+                ...
+              }
+          - pattern: $X
+      - by-side-effect: false
+        patterns:
+          - pattern-inside: |
+              if (!$ALLOWED.has($X)) {
                 ...
               }
               ...
