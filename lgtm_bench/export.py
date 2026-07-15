@@ -498,24 +498,27 @@ def _by_model_condition(records: list[dict], hints: set[tuple[str, str]],
 
 def _by_language(records: list[dict], hints: set[tuple[str, str]],
                  packs: dict[str, list[str]], cats: dict[str, str]) -> list[dict]:
-    vir = M.vir_by_language(records, hints, condition="none")
-    inv = _count_invalid(records, hints, M.record_language, mode="generate",
+    # The byLanguage array is the "same SQL tasks across languages" comparison,
+    # so it is scoped to category=sql. A language that also carries command-
+    # injection or XSS tasks (typescript) must not pool three categories into
+    # one incomparable language cell; cmdi/xss cross-language belongs in the
+    # per-category arrays, not here. packVersions is re-derived from the sql
+    # subset so a typescript row lists sql-typescript, not its cmdi/xss packs.
+    sql = [r for r in records if M.record_category(r, cats) == "sql"]
+    sql_packs = M.packs_by_language(sql)
+    vir = M.vir_by_language(sql, hints, condition="none")
+    inv = _count_invalid(sql, hints, M.record_language, mode="generate",
                          conditions=("none",))
-    # Category is the set of categories present in the language's records, so a
-    # per-language row states which categories it pools instead of "sql".
-    lang_cat = {lang: _row_category([r for r in records
-                                     if M.record_language(r) == lang], cats)
-                for lang in {M.record_language(r) for r in records}}
     out = []
     for lang, rate in vir.items():
-        macro = M.macro_vir(records, hints, condition="none", language=lang)
-        out.append({"language": lang, "category": lang_cat.get(lang, ""),
+        macro = M.macro_vir(sql, hints, condition="none", language=lang)
+        out.append({"language": lang, "category": "sql",
                     "condition": "none",
                     "mode": "generate", "scope": "all-languages",
-                    "packVersions": packs.get(lang, []),
+                    "packVersions": sql_packs.get(lang, []),
                     "vir": _vir_stat(rate, inv.get(lang, 0)),
                     "macroVir": _num(macro)})
-    order = {l: i for i, l in enumerate(M.languages_present(records))}
+    order = {l: i for i, l in enumerate(M.languages_present(sql))}
     out.sort(key=lambda d: order.get(d["language"], 99))
     return out
 
@@ -523,21 +526,22 @@ def _by_language(records: list[dict], hints: set[tuple[str, str]],
 def _by_model_language(records: list[dict], hints: set[tuple[str, str]],
                        packs: dict[str, list[str]],
                        cats: dict[str, str]) -> list[dict]:
-    vir = M.vir_by_model_language(records, hints, condition="none")
-    inv = _count_invalid(records, hints,
+    # SQL-only, mirroring _by_language: each (model, language) cross-language
+    # cell compares the same SQL tasks, never a category mix.
+    sql = [r for r in records if M.record_category(r, cats) == "sql"]
+    sql_packs = M.packs_by_language(sql)
+    vir = M.vir_by_model_language(sql, hints, condition="none")
+    inv = _count_invalid(sql, hints,
                          lambda r: (r["model"], M.record_language(r)),
                          mode="generate", conditions=("none",))
-    lang_cat = {lang: _row_category([r for r in records
-                                     if M.record_language(r) == lang], cats)
-                for lang in {M.record_language(r) for r in records}}
-    order = {l: i for i, l in enumerate(M.languages_present(records))}
+    order = {l: i for i, l in enumerate(M.languages_present(sql))}
     out = []
     for (model, lang), rate in vir.items():
         out.append({"model": model, "language": lang,
-                    "category": lang_cat.get(lang, ""),
+                    "category": "sql",
                     "condition": "none", "mode": "generate",
                     "scope": "all-languages",
-                    "packVersions": packs.get(lang, []),
+                    "packVersions": sql_packs.get(lang, []),
                     "vir": _vir_stat(rate, inv.get((model, lang), 0))})
     out.sort(key=lambda d: (M.natural_sort_key(d["model"]),
                             order.get(d["language"], 99)))

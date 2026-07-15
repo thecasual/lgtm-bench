@@ -211,9 +211,14 @@ def build_html_report(records: list[dict], tasks: list[TaskSpec]) -> str:
         model_clause = f"{n_claude} Claude models"
     subtitle = f"How often {model_clause} {BRAND['report_subtitle_tail']}"
 
-    # cross-language rows (only rendered if go/rust present)
-    xlang = M.vir_by_model_language(records_all, hints, condition="none")
-    xlang_pooled = M.vir_by_language(records_all, hints, condition="none")
+    # cross-language rows (only rendered if go/rust present). Scoped to
+    # category=sql: this is the "same SQL tasks across languages" comparison, so
+    # a language that also carries command-injection or XSS tasks (typescript)
+    # contributes ONLY its sql-typescript trials here, never a three-category mix.
+    xlang = M.vir_by_model_language(records_all, hints, condition="none",
+                                    category="sql", categories=cats)
+    xlang_pooled = M.vir_by_language(records_all, hints, condition="none",
+                                     category="sql", categories=cats)
     other_langs = [l for l in langs if l != "python"]
 
     # ---- compute the figures the narrative references ----
@@ -364,7 +369,8 @@ def build_html_report(records: list[dict], tasks: list[TaskSpec]) -> str:
             r = xlang_pooled.get(lang)
             if not (r and r.n):
                 continue
-            macro = M.macro_vir(records_all, hints, condition="none", language=lang)
+            macro = M.macro_vir(records_all, hints, condition="none",
+                                language=lang, category="sql", categories=cats)
             cap = f"n={r.n}"
             if macro is not None:
                 cap += f", {100*macro:.0f}% equal-weight"

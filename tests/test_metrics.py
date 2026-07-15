@@ -179,6 +179,110 @@ def test_remediation_counts_fixed_and_flagged():
     assert (d["flag"].k, d["flag"].n) == (2, 3)
 
 
+# -- mixed detector-pack guard: key by pack BASE NAME, not language ----------
+
+def _pack_rec(language, pack, task_id=None, verdict="secure") -> dict:
+    """A minimal non-error record carrying a language and a detector pack
+    version, the only fields mixed_pack_languages reads."""
+    r = rec(task_id=task_id or f"{language}/t", verdict=verdict)
+    r["language"] = language
+    r["detector_pack_version"] = pack
+    r["error"] = None
+    return r
+
+
+def test_pack_base_strips_version():
+    assert M.pack_base("sql-go@0.3.0") == "sql-go"
+    assert M.pack_base("cmdi-typescript@0.2.0") == "cmdi-typescript"
+    assert M.pack_base("sql@0.9.0") == "sql"
+
+
+def test_two_categories_one_language_is_not_a_mixed_pack():
+    # python legitimately carries TWO different packs (sql + command-injection),
+    # each at its own single current version: not a skipped regrade, no warning.
+    records = [
+        _pack_rec("python", "sql@0.9.0", task_id="sql/t"),
+        _pack_rec("python", "cmdi-python@0.1.0", task_id="cmdi-python/t"),
+    ]
+    assert M.mixed_pack_languages(records) == {}
+
+
+def test_three_categories_typescript_is_not_a_mixed_pack():
+    records = [
+        _pack_rec("typescript", "sql-typescript@0.2.0", task_id="sql-typescript/t"),
+        _pack_rec("typescript", "cmdi-typescript@0.2.0", task_id="cmdi-typescript/t"),
+        _pack_rec("typescript", "xss-typescript@0.2.0", task_id="xss-typescript/t"),
+    ]
+    assert M.mixed_pack_languages(records) == {}
+
+
+def test_same_pack_base_two_versions_is_flagged():
+    # the SAME base (sql-go) at two versions is the real skipped-regrade signal;
+    # a second single-version base in the same language must not be listed.
+    records = [
+        _pack_rec("go", "sql-go@0.2.0", task_id="sql-go/t"),
+        _pack_rec("go", "sql-go@0.3.0", task_id="sql-go/t"),
+        _pack_rec("go", "cmdi-go@0.1.0", task_id="cmdi-go/t"),
+    ]
+    assert M.mixed_pack_languages(records) == {"go": ["sql-go@0.2.0", "sql-go@0.3.0"]}
+
+
+# -- cross-language VIR is SQL-scoped ----------------------------------------
+
+def _one_lang_three_categories() -> list[dict]:
+    """A single 'typescript' language carrying three categories: sql-typescript
+    (0/4 vulnerable), command-injection (4/4), xss (4/4). Pooling all three is
+    8/12; the SQL-only rate is 0/4."""
+    out = []
+    for cat, tid, verdict in [
+            ("sql", "sql-typescript/t", "secure"),
+            ("command-injection", "cmdi-typescript/t", "vulnerable"),
+            ("xss", "xss-typescript/t", "vulnerable")]:
+        for i in range(4):
+            r = rec(task_id=tid, variant_id=f"v{i}", verdict=verdict,
+                    trial_index=i)
+            r["language"] = "typescript"
+            r["category"] = cat
+            out.append(r)
+    return out
+
+
+def test_vir_by_language_sql_scope_excludes_other_categories():
+    records = _one_lang_three_categories()
+    # unscoped pools all three categories into one incomparable cell
+    allc = M.vir_by_language(records, hints=set())
+    assert (allc["typescript"].k, allc["typescript"].n) == (8, 12)
+    # SQL-scoped returns only the sql-typescript trials
+    sql = M.vir_by_language(records, hints=set(), category="sql", categories={})
+    assert (sql["typescript"].k, sql["typescript"].n) == (0, 4)
+
+
+def test_vir_by_model_language_sql_scope_excludes_other_categories():
+    records = _one_lang_three_categories()
+    sql = M.vir_by_model_language(records, hints=set(), category="sql",
+                                  categories={})
+    assert (sql[("m1", "typescript")].k, sql[("m1", "typescript")].n) == (0, 4)
+
+
+def test_category_filter_resolves_prefix_only_records_via_task_map():
+    # go/rust sql records carry no explicit `category`; the sql filter must
+    # resolve them through the task map (sql-go/... -> "sql"), not the raw id
+    # prefix ("sql-go"), so they are kept in the sql-scoped cross-language cell.
+    records = []
+    for i in range(4):
+        r = rec(task_id="sql-go/user-lookup", variant_id=f"v{i}",
+                verdict="vulnerable" if i == 0 else "secure", trial_index=i)
+        r["language"] = "go"
+        r.pop("category", None)  # no explicit category, prefix is "sql-go"
+        records.append(r)
+    cats = {"sql-go/user-lookup": "sql"}
+    sql = M.vir_by_language(records, hints=set(), category="sql", categories=cats)
+    assert (sql["go"].k, sql["go"].n) == (1, 4)
+    # without the task map the prefix "sql-go" would not match "sql"
+    assert M.vir_by_language(records, hints=set(), category="sql",
+                             categories=None).get("go") is None
+
+
 def test_html_report_builds_and_is_self_contained(tmp_path):
     import glob, json
     from lgtm_bench.html_report import build_html_report

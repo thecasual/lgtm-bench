@@ -170,6 +170,59 @@ def test_clean_single_pack_has_no_banner():
     assert "WARNING: mixed detector pack versions" not in h
 
 
+def test_two_categories_in_one_language_do_not_trip_banner():
+    # A single language (python) carrying two DIFFERENT category packs
+    # (sql@0.9.0 + cmdi-python@0.1.0 + xss@0.1.0), each at its own current
+    # version, is NOT a skipped regrade: the guard keys by pack base name, so no
+    # banner fires in either generator.
+    recs = _multi_category()
+    packs = {r["detector_pack_version"] for r in recs}
+    assert len(packs) > 1  # the language really does carry several packs
+    assert M.mixed_pack_languages(recs) == {}
+    md = build_report(recs, [])
+    h = build_html_report(recs, [])
+    assert "WARNING: mixed detector pack versions" not in md
+    assert "WARNING: mixed detector pack versions" not in h
+
+
+def _typescript_two_categories() -> list[dict]:
+    """Python SQL plus a typescript language carrying BOTH sql-typescript (all
+    secure) and cmdi-typescript (all vulnerable). The cross-language SQL
+    comparison must show typescript at its sql-only rate (0%, n=4), never the
+    category-contaminated pooled rate (50%, n=8)."""
+    out = _python_only()
+    for cat, prefix, pack, verdict in [
+            ("sql", "sql-typescript", "sql-typescript@0.2.0", "secure"),
+            ("command-injection", "cmdi-typescript", "cmdi-typescript@0.2.0",
+             "vulnerable")]:
+        for m in ["claude-opus-4-8", "claude-haiku-4-5"]:
+            for i in range(2):
+                out.append(rec(model=m, task_id=f"{prefix}/task",
+                               language="typescript", category=cat,
+                               detector_pack_version=pack, variant_id=f"v{i}",
+                               trial_index=i, verdict=verdict))
+    return out
+
+
+def test_cross_language_section_is_sql_scoped():
+    recs = _typescript_two_categories()
+    # metric-level: typescript sql-only VIR is 0/4, not the contaminated 4/8
+    vl = M.vir_by_language(recs, set(), condition="none", category="sql",
+                           categories={})
+    assert (vl["typescript"].k, vl["typescript"].n) == (0, 4)
+    # unscoped would have pooled sql + cmdi into 4/8
+    assert M.vir_by_language(recs, set(), condition="none")["typescript"].n == 8
+
+    md = build_report(recs, [])
+    h = build_html_report(recs, [])
+    # the pooled bullet reports typescript over the sql-only n=4, never n=8
+    line = next(l for l in md.splitlines() if "Pooled across models" in l)
+    assert "typescript 0% (0-" in line and "n=4)" in line
+    assert "n=8)" not in line
+    # and the html cross-language block agrees (sql-only, no cmdi contamination)
+    assert "n=8" not in h.split("Cross-language")[1].split("</section>")[0]
+
+
 # -- (d) natural model ordering -----------------------------------------------
 
 def test_natural_sort_orders_qwen3_8b_before_14b():

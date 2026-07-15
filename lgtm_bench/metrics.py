@@ -148,24 +148,48 @@ def vir_by_model_condition(records: list[dict], hints: set[tuple[str, str]],
     return {key: _vir(rs) for key, rs in groups.items()}
 
 
+def _cat_ok(r: dict, category: Optional[str],
+            categories: Optional[dict[str, str]]) -> bool:
+    """True when `r` belongs to `category` (or no filter is requested). Uses
+    record_category so a prefix-only record (sql-go/…) resolves through the
+    passed-in task map to its real category (`sql`), not the raw id prefix."""
+    return category is None or record_category(r, categories) == category
+
+
 def vir_by_model_language(records: list[dict], hints: set[tuple[str, str]],
-                          condition: str = "none") -> dict[tuple[str, str], RateCI]:
+                          condition: str = "none",
+                          category: Optional[str] = None,
+                          categories: Optional[dict[str, str]] = None
+                          ) -> dict[tuple[str, str], RateCI]:
     """VIR per model × language for net-new-code (generate) at one condition.
     Feeds the cross-language section — the only place go/rust appear, since
-    their packs are generate/condition-none only."""
+    their packs are generate/condition-none only. Pass category="sql" (with the
+    task categories map) so the cross-language cells compare the SAME SQL tasks
+    across languages: a language that now also carries command-injection or XSS
+    tasks (e.g. typescript) would otherwise pool three categories into one
+    incomparable cell."""
     groups: dict[tuple[str, str], list[dict]] = defaultdict(list)
     for r in headline(records, hints):
-        if r["condition"] == condition and r.get("mode", "generate") == "generate":
+        if r["condition"] == condition and r.get("mode", "generate") == "generate" \
+                and _cat_ok(r, category, categories):
             groups[(r["model"], record_language(r))].append(r)
     return {key: _vir(rs) for key, rs in groups.items()}
 
 
 def vir_by_language(records: list[dict], hints: set[tuple[str, str]],
-                    condition: str = "none") -> dict[str, RateCI]:
-    """Pooled-across-models VIR per language (generate, one condition)."""
+                    condition: str = "none",
+                    category: Optional[str] = None,
+                    categories: Optional[dict[str, str]] = None
+                    ) -> dict[str, RateCI]:
+    """Pooled-across-models VIR per language (generate, one condition). Pass
+    category="sql" (with the task categories map) to keep the cross-language
+    comparison to the SAME SQL tasks: pooling a language's sql + command-
+    injection + xss trials into one language cell is not comparable across
+    languages."""
     groups: dict[str, list[dict]] = defaultdict(list)
     for r in headline(records, hints):
-        if r["condition"] == condition and r.get("mode", "generate") == "generate":
+        if r["condition"] == condition and r.get("mode", "generate") == "generate" \
+                and _cat_ok(r, category, categories):
             groups[record_language(r)].append(r)
     return {lang: _vir(rs) for lang, rs in groups.items()}
 
@@ -329,7 +353,9 @@ def brownfield_delta(records: list[dict], hints: set[tuple[str, str]]) -> dict[s
 
 def macro_vir(records: list[dict], hints: set[tuple[str, str]],
               condition: str = "none",
-              language: Optional[str] = None) -> Optional[float]:
+              language: Optional[str] = None,
+              category: Optional[str] = None,
+              categories: Optional[dict[str, str]] = None) -> Optional[float]:
     """Per-model macro-average VIR (mean of each model's VIR), the equal-weight
     counterpart to the trial-weighted pool. Every model counts once regardless
     of how many trials it ran, so a K=8 OSS cell can't outvote a K=2 Claude
@@ -347,6 +373,8 @@ def macro_vir(records: list[dict], hints: set[tuple[str, str]],
         if r.get("mode", "generate") != "generate":
             continue
         if language is not None and record_language(r) != language:
+            continue
+        if not _cat_ok(r, category, categories):
             continue
         per_model[r["model"]].append(r)
     rates = [_vir(rs).p for rs in per_model.values() if rs]
@@ -428,15 +456,39 @@ def packs_by_language(records: list[dict]) -> dict[str, list[str]]:
     return {lang: sorted(vs) for lang, vs in out.items()}
 
 
+def pack_base(pack_version: str) -> str:
+    """The base name of a detector_pack_version string: the part before "@"
+    (e.g. "sql-go@0.3.0" -> "sql-go", "cmdi-typescript@0.2.0" ->
+    "cmdi-typescript"). Each vulnerability category ships its own pack base per
+    language, so the base name is what identifies "the same pack"."""
+    return pack_version.split("@", 1)[0]
+
+
 def mixed_pack_languages(records: list[dict]) -> dict[str, list[str]]:
-    """Languages whose non-error records carry MORE THAN ONE distinct
-    detector_pack_version, the exact signature of a skipped regrade (raw
-    sql-go@0.1.0 records left mixed in with regraded 0.3.0 ones). Returns only
-    the offending languages, each mapped to its list of versions, empty when
-    the data is clean. The generators turn a non-empty result into a loud
-    banner rather than refusing to render."""
-    return {lang: vs for lang, vs in packs_by_language(records).items()
-            if len(vs) > 1}
+    """Languages that carry the SAME detector-pack base name at MORE THAN ONE
+    version, the exact signature of a skipped/partial regrade (raw sql-go@0.2.0
+    records left mixed in with regraded sql-go@0.3.0 ones). Returns only the
+    offending languages, each mapped to the sorted versions of the base(s) that
+    disagree, empty when the data is clean.
+
+    Keyed by pack BASE NAME, not by language membership: a language that
+    legitimately carries two DIFFERENT packs — python at cmdi-python@0.1.0 AND
+    sql@0.9.0, or typescript at sql-typescript@0.2.0 + cmdi-typescript@0.2.0 +
+    xss-typescript@0.2.0 — is NOT a skipped regrade. Those are separate
+    categories each at its own current version. Only a single base appearing at
+    two versions (sql-go@0.2.0 vs sql-go@0.3.0) is the real signal. The
+    generators turn a non-empty result into a loud banner rather than refusing
+    to render."""
+    out: dict[str, list[str]] = {}
+    for lang, versions in packs_by_language(records).items():
+        by_base: dict[str, set] = defaultdict(set)
+        for v in versions:
+            by_base[pack_base(v)].add(v)
+        offending = sorted(v for vs in by_base.values() if len(vs) > 1
+                           for v in vs)
+        if offending:
+            out[lang] = offending
+    return out
 
 
 def eradication_labels(records: list[dict], hints: set[tuple[str, str]],

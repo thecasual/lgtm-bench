@@ -135,7 +135,12 @@ def _bottom_line(add, records, hints, cats, models, records_all=None, langs=None
     # cross-language, when present
     other = [l for l in langs if l != "python"]
     if other:
-        pooled = M.vir_by_language(records_all, hints, condition="none")
+        # Cross-language is the "same SQL tasks across languages" comparison, so
+        # it is scoped to category=sql: a language that also carries command-
+        # injection or XSS tasks (typescript) must not pool three categories
+        # into one incomparable language cell.
+        pooled = M.vir_by_language(records_all, hints, condition="none",
+                                   category="sql", categories=cats)
         # Report BOTH poolings: trial-weighted (every trial counts once, so a
         # K=8 open-weight cell pulls harder) and equal-weight (every model
         # counts once). Disclosed so a K=8 OSS drop can't silently swing the
@@ -144,7 +149,8 @@ def _bottom_line(add, records, hints, cats, models, records_all=None, langs=None
         for l in langs:
             if l not in pooled:
                 continue
-            macro = M.macro_vir(records_all, hints, condition="none", language=l)
+            macro = M.macro_vir(records_all, hints, condition="none", language=l,
+                                category="sql", categories=cats)
             if macro is not None:
                 bit_list.append(f"{l} {100*pooled[l].p:.0f}% trial-weighted / "
                                 f"{100*macro:.0f}% averaging models equally")
@@ -369,7 +375,11 @@ def build_report(records: list[dict], tasks: list[TaskSpec]) -> str:
             "printed, consistent with VIR being a lower bound everywhere. "
             "Closing this last gap needs interprocedural analysis (CodeQL); it "
             "is the one place the open-source engine hits a wall.\n")
-        xlang = M.vir_by_model_language(records_all, hints, condition="none")
+        # Scoped to category=sql so each cell is the same SQL comparison across
+        # languages; the sql-typescript cell reflects ONLY sql-typescript trials,
+        # never cmdi-typescript / xss-typescript.
+        xlang = M.vir_by_model_language(records_all, hints, condition="none",
+                                        category="sql", categories=cats)
         all_models = M.sorted_models({r["model"] for r in records_all})
         rows = []
         for m in all_models:
@@ -383,13 +393,14 @@ def build_report(records: list[dict], tasks: list[TaskSpec]) -> str:
         # Disclose the pooling: the bar-style trial-weighted number (with CI)
         # AND the equal-weight macro-average (each model once, no CI). With K=8
         # open-weight cells arriving, the two can diverge, so we print both.
-        pooled = M.vir_by_language(records_all, hints, condition="none")
+        pooled = M.vir_by_language(records_all, hints, condition="none",
+                                   category="sql", categories=cats)
         pooled_bits = []
         for lang in langs:
             if lang not in pooled:
                 continue
             macro = M.macro_vir(records_all, hints, condition="none",
-                                language=lang)
+                                language=lang, category="sql", categories=cats)
             macro_s = (f"{100*macro:.0f}% averaging models equally (no CI)"
                        if macro is not None else "n/a averaging models equally")
             pooled_bits.append(
