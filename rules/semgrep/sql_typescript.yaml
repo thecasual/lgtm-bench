@@ -1,0 +1,251 @@
+rules:
+  # ------------------------------------------------------------------
+  # Shared taint-mode design (both rules below), mirroring the go/rust SQL
+  # packs (rules/semgrep/sql_go.yaml, sql_rust.yaml) for a fourth language.
+  #
+  # SOURCES  - untrusted input: any `string`-typed function parameter, a
+  #            `string[]`-typed function parameter (both function-declaration
+  #            and arrow-function forms; these benchmark samples are single
+  #            functions, so a typed parameter is the entry point for
+  #            caller-controlled data), the common Express getters
+  #            (req.params.<k>, req.query.<k>, req.body.<k>), and a
+  #            destructured `const { x } = req.query` / `req.body` binding.
+  #
+  # SINKS    - the query-STRING argument (only, via focus-metavariable) of
+  #            the common Node SQL driver call shapes: pg pool.query/
+  #            client.query, better-sqlite3 db.prepare/db.exec, mysql2
+  #            conn.query/conn.execute, typeorm repo.query, knex .raw, and
+  #            a typeorm QueryBuilder .where(...) fragment reached off a
+  #            createQueryBuilder() chain. The params/values array (a 2nd
+  #            positional argument) is never the focused metavariable, so a
+  #            tainted value that only reaches the values array is not
+  #            flagged - it is bound, not interpolated.
+  #
+  # SANITIZERS - idioms that make the query text safe even though a value
+  #            derived from tainted input is nearby:
+  #              - `$MAP[$KEY]` (excluding bracket reads directly off
+  #                req.params/query/body, which are *sources* not lookups
+  #                against a fixed allowlist): an allowlist/allow-map lookup
+  #                never lets the tainted key itself reach the query text -
+  #                only one of the map's own literal values can.
+  #              - `Number(...)` / `parseInt(...)`: numeric coercion strips
+  #                any SQL syntax the original string could carry, the
+  #                standard LIMIT/OFFSET idiom.
+  #              - allowlist MEMBERSHIP guards where the ORIGINAL tainted
+  #                value (not a distinct mapped value) is what reaches the
+  #                query text: `$ALLOWED.includes($X) ? $X : $DEFAULT`,
+  #                `if ($ALLOWED.includes($X)) { ...use $X... }`, and the
+  #                mirror-image negative-branch-returns-early form
+  #                (`if (!$ALLOWED.includes($X)) { throw/return; }` followed
+  #                later by `...use $X...`), plus a `switch ($X) { case
+  #                "a": ...use $X... }` allowlist. In every one of these
+  #                shapes $X is constrained to one of a fixed, literal set
+  #                of safe values before it can reach the query text.
+  #            (A `switch (sortBy) { case "x": query = "..." }` allowlist
+  #            that assigns a *literal* into the query needs no explicit
+  #            sanitizer: the tainted variable is never itself assigned into
+  #            the query text, so ordinary dataflow already keeps it clean.
+  #            The switch/includes sanitizers above are for the different
+  #            shape where the tainted variable itself - not a fresh literal
+  #            - is what gets interpolated inside the guarded branch.)
+  #
+  # PROPAGATORS - a `let q = "..."; q += $X;` accumulation chain (JS/TS `+=`
+  #            is not always tracked by semgrep's default dataflow the way
+  #            plain `+` is), and `$ARR.join(...)` - an array of values
+  #            joined straight into the query text is exactly as dangerous
+  #            as a single concatenated value (the "IN list expansion via
+  #            join" shape). Template-literal interpolation (`` `...${x}...`
+  #            ``) and plain `+` concatenation are already tracked by
+  #            semgrep's built-in JS/TS taint dataflow, so no propagator is
+  #            needed for either.
+  # ------------------------------------------------------------------
+
+  - id: sql.ts.interpolated-into-query
+    languages: [typescript]
+    severity: ERROR
+    mode: taint
+    message: >-
+      A SQL query string is built from untrusted input via template-literal
+      interpolation or string concatenation and passed to a query/exec sink;
+      the value is not parameterized (SQL injection).
+    pattern-sources: &sources
+      # A string-typed function parameter (function declaration or arrow).
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  function $F(..., $PARAM: string, ...) { ... }
+              - pattern-inside: |
+                  function $F(..., $PARAM: string, ...): $RET { ... }
+              - pattern-inside: |
+                  async function $F(..., $PARAM: string, ...) { ... }
+              - pattern-inside: |
+                  async function $F(..., $PARAM: string, ...): $RET { ... }
+              - pattern-inside: |
+                  const $F = (..., $PARAM: string, ...) => { ... }
+              - pattern-inside: |
+                  const $F = ($PARAM: string, ...): $RET => { ... }
+              - pattern-inside: |
+                  const $F = async (..., $PARAM: string, ...) => { ... }
+              - pattern-inside: |
+                  export function $F(..., $PARAM: string, ...) { ... }
+              - pattern-inside: |
+                  export function $F(..., $PARAM: string, ...): $RET { ... }
+              - pattern-inside: |
+                  export async function $F(..., $PARAM: string, ...) { ... }
+          - pattern: $PARAM
+      # A string[]-typed function parameter (id-list / expansion shape).
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  function $F(..., $PARAM: string[], ...) { ... }
+              - pattern-inside: |
+                  function $F(..., $PARAM: string[], ...): $RET { ... }
+              - pattern-inside: |
+                  const $F = (..., $PARAM: string[], ...) => { ... }
+              - pattern-inside: |
+                  export function $F(..., $PARAM: string[], ...) { ... }
+          - pattern: $PARAM
+      - pattern: $REQ.params.$K
+      - pattern: $REQ.query.$K
+      - pattern: $REQ.body.$K
+      # Destructured `const { x } = req.query` / req.body (single- and
+      # two-key forms; each key destructured is its own taint source).
+      - patterns:
+          - pattern: |
+              const { $X } = $REQ.query
+          - focus-metavariable: $X
+      - patterns:
+          - pattern: |
+              const { $X, $Y } = $REQ.query
+          - focus-metavariable: $X
+      - patterns:
+          - pattern: |
+              const { $X, $Y } = $REQ.query
+          - focus-metavariable: $Y
+      - patterns:
+          - pattern: |
+              const { $X } = $REQ.body
+          - focus-metavariable: $X
+      - patterns:
+          - pattern: |
+              const { $X, $Y } = $REQ.body
+          - focus-metavariable: $X
+      - patterns:
+          - pattern: |
+              const { $X, $Y } = $REQ.body
+          - focus-metavariable: $Y
+    pattern-sinks: &sinks
+      # pg pool.query/client.query, mysql2 conn.query/conn.execute,
+      # better-sqlite3 db.prepare/db.exec, typeorm repo.query. The
+      # params/values array (any argument after the first) is never the
+      # focused metavariable, so it is out of scope for this rule.
+      - patterns:
+          - pattern: $DB.$M($Q, ...)
+          - focus-metavariable: $Q
+          - metavariable-regex:
+              metavariable: $M
+              regex: ^(query|execute|prepare|exec)$
+      # knex .raw(query-text, [bind-values]).
+      - patterns:
+          - pattern: $KNEX.raw($Q, ...)
+          - focus-metavariable: $Q
+      # typeorm QueryBuilder .where(fragment, [params]) reached off a
+      # createQueryBuilder() chain (directly chained, or via a variable the
+      # chain was assigned to). Plain knex/other `.where(col, val)` binder
+      # calls never go through createQueryBuilder, so they don't match here.
+      - patterns:
+          - pattern: $REPO.createQueryBuilder(...).where($Q, ...)
+          - focus-metavariable: $Q
+      - patterns:
+          - pattern-inside: |
+              $QB = $REPO.createQueryBuilder(...)
+              ...
+          - pattern: $QB.where($Q, ...)
+          - focus-metavariable: $Q
+    pattern-sanitizers: &sanitizers
+      - by-side-effect: false
+        patterns:
+          - pattern: $MAP[$KEY]
+          - pattern-not: $REQ.params[$KEY]
+          - pattern-not: $REQ.query[$KEY]
+          - pattern-not: $REQ.body[$KEY]
+      - by-side-effect: false
+        pattern: Number(...)
+      - by-side-effect: false
+        pattern: parseInt(...)
+      # Allowlist ternary: `ALLOWED.includes(x) ? x : default`.
+      - by-side-effect: false
+        pattern: "$ALLOWED.includes($X) ? $X : $DEFAULT"
+      # Allowlist membership guard, positive-branch form.
+      - by-side-effect: false
+        patterns:
+          - pattern-inside: |
+              if ($ALLOWED.includes($X)) {
+                ...
+              }
+          - pattern: $X
+      # Allowlist membership guard, negative-branch-returns-early form.
+      - by-side-effect: false
+        patterns:
+          - pattern-inside: |
+              if (!$ALLOWED.includes($X)) {
+                ...
+              }
+              ...
+          - pattern: $X
+      # `switch ($X) { case "a": ...use $X... }` allowlist: the tainted
+      # switch subject itself - not a fresh literal - is used inside the
+      # matched case.
+      - by-side-effect: false
+        patterns:
+          - pattern-inside: |
+              switch ($X) {
+                case ...:
+                  ...
+              }
+          - pattern: $X
+      # `$ARR.map(...).join(...)` placeholder-list builders. Safe ONLY when
+      # the generated token is a fixed placeholder derived from the loop
+      # INDEX (a `$1,$2,...` positional list) or a constant `?` list, never
+      # from the element VALUE. This is the "placeholder list, not a value
+      # join" shape called out in the propagator design note above, and it
+      # is deliberately narrower than a bare `$ARR.join(...)` (which stays
+      # tainted because it joins the real values). The element parameter's
+      # NAME is irrelevant here: what makes the shape safe is that the
+      # produced token references the index, not the element, so
+      # `ids.map((id, i) => `$${i + 1}`)` and `ids.map((_, i) => `$${i}`)`
+      # both clear, while a value join such as `ids.map(id => `'${id}'`)`
+      # or `names.map(n => "'" + n + "'")` does NOT (the element itself is
+      # interpolated/concatenated, so it stays tainted and is still flagged).
+      # Positional placeholder built from the index: the map body is a
+      # template literal interpolating the index metavariable ($I) or an
+      # `$I + n` offset of it (pg is 1-based, so `${i + 1}` is the norm).
+      - by-side-effect: false
+        patterns:
+          - pattern: $ARR.map(($E, $I) => $EXPR).join(...)
+          - metavariable-pattern:
+              metavariable: $EXPR
+              pattern-either:
+                - pattern: "`...${$I}...`"
+                - pattern: "`...${$I + $N}...`"
+      # Constant `?` placeholder list (mysql2 / better-sqlite3), where every
+      # element maps to the same literal `?` regardless of its value. Covered
+      # for the zero-, one- and two-parameter callback arities a developer
+      # writes (`() => "?"`, `(_) => "?"`, `(_, i) => "?"`); single and double
+      # quotes are equivalent to semgrep here.
+      - by-side-effect: false
+        pattern: $ARR.map(($E, $I) => "?").join(...)
+      - by-side-effect: false
+        pattern: $ARR.map(($E) => "?").join(...)
+      - by-side-effect: false
+        pattern: $ARR.map(() => "?").join(...)
+    pattern-propagators:
+      # `let q = "..."; q += $Y;` accumulation.
+      - pattern: $X += $Y
+        from: $Y
+        to: $X
+      # An array of values joined straight into the query text is exactly
+      # as dangerous as a single concatenated value.
+      - pattern: $ARR.join(...)
+        from: $ARR
+        to: $ARR.join(...)

@@ -140,6 +140,33 @@ def test_edit_task_with_condition_none_rejected(tmp_path):
         load_task(_write(tmp_path, "nonecond.yaml", bad))
 
 
+# -- review mode --------------------------------------------------------------
+
+def test_review_task_happy_path():
+    task = TaskSpec(
+        id="review-sql/order-by-column", category="sql", mode=Mode.REVIEW,
+        title="Review a route", target="routes/search.py::list_products_sorted",
+        conditions=[Condition.NONE],
+        variants=[Variant(id="v1", prompt="quick review before merge?")])
+    assert task.mode == Mode.REVIEW
+    assert task.target_file == "routes/search.py"
+    assert task.target_function == "list_products_sorted"
+
+
+def test_review_task_without_target_rejected():
+    with pytest.raises(ValueError, match="target"):
+        TaskSpec(id="review-sql/x", category="sql", mode=Mode.REVIEW,
+                 title="x", conditions=[Condition.NONE],
+                 variants=[Variant(id="v1", prompt="p")])
+
+
+def test_review_task_with_non_none_condition_rejected():
+    with pytest.raises(ValueError, match="none"):
+        TaskSpec(id="review-sql/x", category="sql", mode=Mode.REVIEW, title="x",
+                 target="routes/search.py::f", conditions=[Condition.DIRTY],
+                 variants=[Variant(id="v1", prompt="p")])
+
+
 # -- identity determinism -----------------------------------------------------
 
 def test_run_config_hash_deterministic_and_order_insensitive():

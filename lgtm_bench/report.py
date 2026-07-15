@@ -6,6 +6,7 @@ from collections import defaultdict
 from pathlib import Path
 
 from . import HARNESS_VERSION
+from .categories import cwe_for, label_for
 from .detectors.semgrep import semgrep_available
 from . import metrics as M
 from .schema import TaskSpec
@@ -16,6 +17,24 @@ def _table(headers: list[str], rows: list[list[str]]) -> str:
            "|" + "|".join(["---"] * len(headers)) + "|"]
     out += ["| " + " | ".join(r) + " |" for r in rows]
     return "\n".join(out)
+
+
+def _categories_present(records_all: list[dict], cats: dict[str, str]) -> list[str]:
+    """The sorted set of vulnerability categories the data actually covers.
+    Every category-count claim in the prose reads from this, so 'N of 6
+    hypotheses' and the 'N vulnerability classes' limitation track the records
+    instead of a hardcoded 'SQL injection only'."""
+    return sorted({M.record_category(r, cats) for r in records_all})
+
+
+def _hypothesis_bits(cats_present: list[str]) -> str:
+    """Render categories as 'label/CWE' bits, e.g. 'SQL injection/CWE-89,
+    OS command injection/CWE-78'. CWE ids come from the categories registry."""
+    bits = []
+    for c in cats_present:
+        cwe = ", ".join(cwe_for(c))
+        bits.append(f"{label_for(c)}/{cwe}" if cwe else label_for(c))
+    return ", ".join(bits)
 
 
 def _bottom_line(add, records, hints, cats, models, records_all=None, langs=None):
@@ -157,10 +176,16 @@ def _bottom_line(add, records, hints, cats, models, records_all=None, langs=None
         vendor_clause = (
             f"all {nmodels} models are Claude-family (so the cross-vendor "
             "\"generation gap\" question is only partially probed)")
+    # Category coverage is data-derived: the count and the category/CWE list
+    # both come from the records, so a cmdi/xss data drop updates this copy
+    # automatically instead of leaving a stale "SQL injection only".
+    cats_present = _categories_present(records_all, cats)
+    ncat = len(cats_present)
+    cat_bits = _hypothesis_bits(cats_present)
     bullets.append(
         "**Read this as a proof-of-concept, not a leaderboard.** This run "
-        "covers **1 of the 6** pre-registered vulnerability hypotheses (SQL "
-        f"injection only), {vendor_clause}, "
+        f"covers **{ncat} of the 6** pre-registered vulnerability hypotheses "
+        f"({cat_bits}), {vendor_clause}, "
         f"{lang_clause}, {M.k_clause(records_all)} trials/cell. Rely on the "
         "CIs. See **Limitations**.")
 
@@ -178,8 +203,12 @@ def build_report(records: list[dict], tasks: list[TaskSpec]) -> str:
     # edit tasks). Go/Rust are a separate cross-language section below, since
     # their audited taint packs run generate/condition-none only. Mixing them
     # into the headline would misrepresent both. Pack versions are read from the
-    # records (see the detector-packs line), never hardcoded here.
-    records = [r for r in records_all if M.record_language(r) == "python"]
+    # records (see the detector-packs line), never hardcoded here. Review-mode
+    # trials are also excluded from the analytical body: they measure detection
+    # of a planted vuln, not introduction, and get their own section below.
+    records = [r for r in records_all
+               if M.record_language(r) == "python" and r.get("mode") != "review"]
+    records_review = [r for r in records_all if r.get("mode") == "review"]
     models = M.sorted_models({r["model"] for r in records})
     conditions = [c for c in ("none", "clean-repo", "dirty-repo")
                   if any(r["condition"] == c for r in records)]
@@ -377,15 +406,19 @@ def build_report(records: list[dict], tasks: list[TaskSpec]) -> str:
         "not conclusive at this sample size). \"Eradicated\" is a statement "
         "about *this benchmark's tasks and detectors at this sample size*, not "
         "a claim that the model can never write SQL injection.\n")
+    # One row per category so the CWE anchor gets its own column; each model is
+    # a column carrying that category's verdict. With a single category today
+    # this is one row; cmdi/xss appear as extra rows automatically once their
+    # tasks/records exist.
     labels = M.eradication_labels(records, hints, cats)
     cat_names = sorted({c for (_, c) in labels})
     rows = []
-    for m in models:
-        row = [f"`{m}`"]
-        for c in cat_names:
+    for c in cat_names:
+        row = [f"`{c}`", ", ".join(cwe_for(c)) or "-"]
+        for m in models:
             row.append(labels.get((m, c), "-") or "n/a (inconclusive)")
         rows.append(row)
-    add(_table(["Model"] + cat_names, rows))
+    add(_table(["Category", "CWE"] + [f"`{m}`" for m in models], rows))
     add("")
 
     # -- flip rate
@@ -502,6 +535,21 @@ def build_report(records: list[dict], tasks: list[TaskSpec]) -> str:
                 "than when writing new code, the single strongest effect in "
                 "this run, and the core brownfield finding.\n")
 
+    # -- review mode (does the model flag the planted vuln in prose?)
+    rev = M.review_detection(records_review)
+    if rev:
+        add("## Review mode: does the model flag the planted vulnerability?\n")
+        add("Review-mode tasks show the model an existing function that already "
+            "contains a planted vulnerability and ask for a prose code review "
+            "(no rewrite). The **flag rate** is the share of reviews whose prose "
+            "named the issue. It is a lexicon-based lower bound over inline code "
+            "the model was explicitly asked to review, so the true detection "
+            "rate is at least this high, never lower. Ranges are Wilson 95% "
+            "CIs.\n")
+        rows = [[f"`{m}`", rev[m].fmt()] for m in M.sorted_models(rev.keys())]
+        add(_table(["Model", "flag rate"], rows))
+        add("")
+
     # -- per-task heat table
     add("## Per-task VIR (condition `none`)\n")
     per_task = M.vir_per_task(records, hints)
@@ -562,17 +610,23 @@ def build_report(records: list[dict], tasks: list[TaskSpec]) -> str:
     # section. Single-language data keeps the old bullet; multi-language data
     # says one vuln class, Python fully hardened, other languages on audited
     # taint packs.
+    # The vulnerability-class count and its category/CWE list are data-derived
+    # so this bullet never contradicts the categories the data actually covers.
+    _cats_present = _categories_present(records_all, cats)
+    _cat_bits = _hypothesis_bits(_cats_present)
+    _nclass = len(_cats_present)
+    _class_noun = ("one vulnerability class" if _nclass == 1
+                   else f"{_nclass} vulnerability classes")
     if len(langs) == 1:
-        add("- **One language, one vulnerability class.** Python + SQL "
-            "injection only. Nothing here generalizes to other languages or "
-            "vulnerability categories until those suites are built (spec §10 "
-            "roadmap).")
+        add(f"- **One language, {_class_noun}.** Python + {_cat_bits} only. "
+            "Nothing here generalizes to other languages or vulnerability "
+            "categories until those suites are built (spec §10 roadmap).")
     else:
         _other_names = ", ".join(l.capitalize() for l in langs if l != "python")
-        add("- **One vulnerability class; Python fully hardened.** SQL "
-            "injection only. Python is the mature vertical (AST detector, "
-            f"fixtures, edit tasks); {_other_names} are covered by audited "
-            "taint packs, generate/condition-none only. Nothing here "
+        add(f"- **{_class_noun[0].upper()}{_class_noun[1:]}; Python fully "
+            f"hardened.** {_cat_bits}. Python is the mature vertical (AST "
+            f"detector, fixtures, edit tasks); {_other_names} are covered by "
+            "audited taint packs, generate/condition-none only. Nothing here "
             "generalizes to other vulnerability categories until those suites "
             "are built (spec §10 roadmap).")
     add("- **The agent wrapper is part of the system under test.** Results "

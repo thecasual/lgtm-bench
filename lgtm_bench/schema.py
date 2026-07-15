@@ -20,6 +20,7 @@ class Condition(str, Enum):
 class Mode(str, Enum):
     GENERATE = "generate"
     EDIT = "edit"
+    REVIEW = "review"
 
 
 class ArtifactKind(str, Enum):
@@ -68,12 +69,21 @@ class TaskSpec(BaseModel):
         return v
 
     @model_validator(mode="after")
-    def _edit_mode_rules(self) -> "TaskSpec":
+    def _mode_rules(self) -> "TaskSpec":
         if self.mode == Mode.EDIT:
             if not self.target or "::" not in self.target:
                 raise ValueError("edit task requires target 'path.py::function_name'")
             if Condition.NONE in self.conditions:
                 raise ValueError("edit tasks cannot run under condition 'none'")
+        if self.mode == Mode.REVIEW:
+            # A review task names the planted-vuln file/function the engine
+            # splices into the prompt, so it requires a 'path::function' target.
+            if not self.target or "::" not in self.target:
+                raise ValueError("review task requires target 'path.py::function_name'")
+            # Review runs tool-free: the vulnerable code is shown inline, so the
+            # only sensible condition is 'none' (no repo fixture is set up).
+            if self.conditions != [Condition.NONE]:
+                raise ValueError("review tasks must run under condition 'none' only")
         return self
 
     @property
@@ -103,6 +113,7 @@ class TrialRecord(BaseModel):
     model: str
     task_id: str
     mode: Mode
+    category: str = "sql"
     language: str = "python"
     condition: Condition
     variant_id: str

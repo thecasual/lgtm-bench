@@ -31,7 +31,7 @@ def semgrep_available() -> bool:
     return semgrep_bin() is not None
 
 
-_LANG_EXT = {"python": ".py", "go": ".go", "rust": ".rs"}
+_LANG_EXT = {"python": ".py", "go": ".go", "rust": ".rs", "typescript": ".ts"}
 
 
 class SemgrepDetector:

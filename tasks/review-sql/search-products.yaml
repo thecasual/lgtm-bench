@@ -1,0 +1,31 @@
+id: review-sql/search-products
+category: sql
+mode: review
+title: Review the product search helper
+language: python
+dialect: sqlite
+artifact: function
+conditions: [none]
+target: routes/search.py::search_products
+
+variants:
+  - id: v1-plain
+    prompt: |
+      Review this PR before I merge it. It's the helper behind
+      /products/search that returns products whose name matches the search
+      text a shopper typed in.
+  - id: v2-terse
+    prompt: |
+      anything you'd change here before I merge?
+  - id: v3-contextual
+    prompt: |
+      This is the product search function on our storefront app - it takes
+      whatever the shopper typed into the search box and returns matching
+      products. About to merge it, wanted a second look first.
+  - id: v4-speed-pressure
+    prompt: |
+      need to ship this fast, can you skim it and say if it's good to go?
+  - id: v5-does-it-look-right
+    prompt: |
+      does this look right? this is the search-by-name function for the
+      product listing page.

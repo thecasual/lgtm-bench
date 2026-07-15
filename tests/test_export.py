@@ -365,6 +365,117 @@ def test_meta_declares_python_headline_scope():
     assert "languageScopeNote" in hp
 
 
+# -- (h) multi-category grouping + CWE ----------------------------------------
+
+def _multi_cat_dataset() -> list[dict]:
+    """Python SQL plus a python command-injection block, so the multi-category
+    grouping (byModelCondition split per category, categoryVerdicts per
+    category, detector packs per category) has two categories to separate."""
+    out = []
+    for j in range(4):
+        out.append(rec(model="claude-opus-4-8", variant_id="v1-plain",
+                       trial_index=j,
+                       verdict="vulnerable" if j == 0 else "secure"))
+    for j in range(4):
+        out.append(rec(model="claude-opus-4-8", task_id="cmdi-python/ping-host",
+                       category="command-injection", variant_id="v1-plain",
+                       trial_index=j, detector_pack_version="cmdi-python@0.1.0",
+                       verdict="vulnerable" if j < 2 else "secure"))
+    return out
+
+
+def _multi_cat_tasks() -> list[TaskSpec]:
+    return [_task(),
+            _task(task_id="cmdi-python/ping-host", category="command-injection")]
+
+
+def test_by_model_condition_splits_per_category():
+    doc = build_export(_multi_cat_dataset(), _multi_cat_tasks())
+    cells = doc["results"]["byModelCondition"]
+    cats = {c["category"] for c in cells}
+    assert cats == {"sql", "command-injection"}
+    # each category keeps its own VIR: sql 1/4, cmdi 2/4 (no pooling)
+    sql = next(c for c in cells if c["category"] == "sql")
+    cmdi = next(c for c in cells if c["category"] == "command-injection")
+    assert (sql["vir"]["vulnerable"], sql["vir"]["gradable"]) == (1, 4)
+    assert (cmdi["vir"]["vulnerable"], cmdi["vir"]["gradable"]) == (2, 4)
+
+
+def test_category_verdicts_carry_cwe_per_category():
+    doc = build_export(_multi_cat_dataset(), _multi_cat_tasks())
+    verdicts = {c["category"]: c["cwe"] for c in doc["results"]["categoryVerdicts"]}
+    assert verdicts["sql"] == ["CWE-89"]
+    assert verdicts["command-injection"] == ["CWE-78"]
+
+
+def test_detector_packs_carry_correct_category():
+    doc = build_export(_multi_cat_dataset(), _multi_cat_tasks())
+    packs = {e["version"]: e["category"]
+             for entries in doc["detectorPacks"].values() for e in entries}
+    assert packs["sql@0.9.0"] == "sql"
+    assert packs["cmdi-python@0.1.0"] == "command-injection"
+
+
+def test_typescript_appears_in_language_axis():
+    records = _dataset()
+    for k in range(2):
+        records.append(rec(model="claude-opus-4-8",
+                           task_id="sql-typescript/user-lookup",
+                           language="typescript",
+                           detector_pack_version="sql-typescript@0.1.0",
+                           variant_id="v1-plain", trial_index=k,
+                           verdict="secure"))
+    doc = build_export(records, _tasks() + [
+        _task(task_id="sql-typescript/user-lookup", category="sql",
+              language="typescript")])
+    # typescript sits after rust in the ordered language axis
+    assert "typescript" in doc["meta"]["axes"]["language"]
+    assert doc["meta"]["axes"]["language"].index("typescript") > \
+        doc["meta"]["axes"]["language"].index("python")
+
+
+# -- (i) review mode ----------------------------------------------------------
+
+def _review_rec(model="claude-opus-4-8", flagged=True, trial_index=0,
+                verdict="secure") -> dict:
+    return rec(model=model, task_id="review-sql/list-products-sorted",
+               category="sql", mode="review", condition="none",
+               variant_id="v1-plain", trial_index=trial_index, verdict=verdict,
+               flagged_existing=flagged, detector_pack_version="sql@0.9.0")
+
+
+def test_review_detection_array_and_axis():
+    records = _dataset()
+    records.append(_review_rec(model="claude-opus-4-8", flagged=True,
+                               trial_index=0))
+    records.append(_review_rec(model="claude-opus-4-8", flagged=False,
+                               trial_index=1))
+    doc = build_export(records, _tasks())
+    # the reviewDetection array exists and matches metrics exactly
+    rd = doc["results"]["reviewDetection"]
+    opus = next(c for c in rd if c["model"] == "claude-opus-4-8")
+    assert opus["flag"]["flagged"] == 1 and opus["flag"]["n"] == 2
+    assert opus["flag"]["rate"] == M.review_detection(records)[
+        "claude-opus-4-8"].p
+    # review is an enumerated mode axis, and its description is documented
+    assert "review" in doc["meta"]["axes"]["mode"]
+    assert "reviewDetection" in doc["meta"]["metrics"]
+
+
+def test_review_trials_do_not_touch_vir_or_invalid():
+    """A review SECURE/INVALID trial must not move the generate VIR headline or
+    the invalid-by-model counts (review is its own axis)."""
+    base = _dataset()
+    with_review = list(base) + [
+        _review_rec(trial_index=0, verdict="secure"),
+        _review_rec(trial_index=1, verdict="invalid", flagged=False)]
+    a = build_export(base, _tasks())
+    b = build_export(with_review, _tasks())
+    assert a["results"]["byModelCondition"] == b["results"]["byModelCondition"]
+    assert a["results"]["invalidByModel"] == b["results"]["invalidByModel"]
+    assert a["results"]["flipRate"] == b["results"]["flipRate"]
+
+
 def test_current_and_superseded_packs_flagged():
     records = _dataset()
     # two go pack versions -> the older is current:false, newer current:true,

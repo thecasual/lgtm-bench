@@ -23,6 +23,7 @@ from typing import Optional
 
 from . import HARNESS_VERSION
 from . import metrics as M
+from .categories import CATEGORY_META
 from .schema import TaskSpec
 
 SCHEMA_VERSION = "1.0"
@@ -62,12 +63,9 @@ MODEL_META: dict[str, dict] = {
                     "params": "3B", "runner": "ollama"},
 }
 
-# category id -> label + CWE anchor + status. cwe is a list because a future
-# category may span several CWEs (reflected/stored/DOM XSS all under CWE-79).
-CATEGORY_META: dict[str, dict] = {
-    "sql": {"label": "SQL injection", "cwe": ["CWE-89"], "status": "active"},
-    "xss": {"label": "Cross-site scripting", "cwe": ["CWE-79"], "status": "active"},
-}
+# CATEGORY_META (category id -> label + CWE anchor + status) now lives in
+# lgtm_bench.categories so report.py and export.py read one registry. Imported
+# above; _categories() below still emits the same shape.
 
 _VENDOR_BY_PREFIX = [
     ("claude", "anthropic"),
@@ -78,9 +76,9 @@ _VENDOR_BY_PREFIX = [
 ]
 
 # language order for stable axis output; extras append in sorted order.
-_LANG_ORDER = ["python", "go", "rust"]
+_LANG_ORDER = ["python", "go", "rust", "typescript"]
 _COND_ORDER = ["none", "clean-repo", "dirty-repo"]
-_MODE_ORDER = ["generate", "edit"]
+_MODE_ORDER = ["generate", "edit", "review"]
 _VERDICT_ORDER = ["secure", "vulnerable", "invalid"]
 
 
@@ -112,10 +110,23 @@ def _vir_stat(rate: M.RateCI, invalid: Optional[int]) -> dict:
 
 
 def _category_of(r: dict, cats: dict[str, str]) -> str:
-    """Category of a trial: the loaded task's category, falling back to the
-    task-id prefix so a record whose task is not in the tasklist still lands
-    somewhere deterministic (mirrors metrics.eradication_labels)."""
-    return cats.get(r["task_id"]) or r["task_id"].split("/")[0]
+    """Category of a trial: the record's own `category` first, then the loaded
+    task's category, then the task-id prefix. Delegates to
+    metrics.record_category so the whole codebase shares one recovery order."""
+    return M.record_category(r, cats)
+
+
+def _row_category(records: list[dict], cats: dict[str, str]) -> str:
+    """The category label for a POOLED row (a per-model delta or a per-language
+    aggregate). When the pooled trials share a single category that id is
+    returned; when they span several (a per-model delta over sql + cmdi python
+    trials, say) the comma-joined set is returned so the row states which
+    categories it pools rather than hardcoding 'sql'. Empty string for an empty
+    population."""
+    present = sorted({_category_of(r, cats) for r in records})
+    if not present:
+        return ""
+    return present[0] if len(present) == 1 else ",".join(present)
 
 
 def _run_id_to_iso(run_id: str) -> Optional[str]:
@@ -340,6 +351,19 @@ def _metric_descriptions() -> dict:
                 "Over dirty-repo edit trials: fix rate (fixed a pre-existing "
                 "vulnerability) and flag rate (called it out), per model."),
         },
+        "reviewDetection": {
+            "label": "Review-mode flag rate",
+            "unit": "proportion", "isLowerBound": True,
+            "population": "mode=review, non-error",
+            "description": (
+                "In review mode the model is shown an existing function that "
+                "already contains a planted vulnerability and asked for a prose "
+                "code review, no rewrite. The flag rate is the fraction of "
+                "reviews whose prose named the issue, a lexicon-based LOWER "
+                "BOUND (it reuses the same flag lexicon as edit-mode "
+                "remediation), so the true detection rate is at least this "
+                "high."),
+        },
     }
 
 
@@ -404,12 +428,14 @@ def _detector_packs(records: list[dict], cats: dict[str, str]) -> dict:
             continue
         pv = r.get("detector_pack_version")
         if pv and pv not in ver_cat:
-            ver_cat[pv] = _category_of(r, cats)
+            ver_cat[pv] = M.record_category(r, cats)
     out: dict = {}
     for lang, versions in sorted(by_lang.items()):
         entries = []
         for v in versions:
-            entries.append({"language": lang, "category": ver_cat.get(v, "sql"),
+            # Every version present was stamped by a record, so ver_cat has it;
+            # the "" fallback is only a defensive default, never the category.
+            entries.append({"language": lang, "category": ver_cat.get(v, ""),
                             "version": v, "current": v == versions[-1]})
         out[lang] = entries
     return out
@@ -424,7 +450,8 @@ def _task_language(records: list[dict]) -> dict[str, str]:
     return out
 
 
-def _pooled(records: list[dict], hints: set[tuple[str, str]]) -> dict:
+def _pooled(records: list[dict], hints: set[tuple[str, str]],
+            cats: dict[str, str]) -> dict:
     pop = [r for r in M.headline(records, hints)
            if r["condition"] == "none" and r.get("mode", "generate") == "generate"]
     rate = M._vir(pop)
@@ -432,8 +459,10 @@ def _pooled(records: list[dict], hints: set[tuple[str, str]]) -> dict:
         records, hints, lambda r: "x", mode="generate",
         conditions=("none",)).values())
     macro = M.macro_vir(records, hints, condition="none")
-    scope = {"category": "sql", "condition": "none", "mode": "generate",
-             "language": "python"}
+    # Category is data-derived from the pooled population ("sql" today; the set
+    # when a run spans categories) instead of a hardcoded "sql".
+    scope = {"category": _row_category(pop, cats), "condition": "none",
+             "mode": "generate", "language": "python"}
     return {
         "trialWeighted": {"scope": dict(scope),
                           "vir": _vir_stat(rate, invalid)},
@@ -445,29 +474,43 @@ def _pooled(records: list[dict], hints: set[tuple[str, str]]) -> dict:
 
 def _by_model_condition(records: list[dict], hints: set[tuple[str, str]],
                         cats: dict[str, str]) -> list[dict]:
-    vir = M.vir_by_model_condition(records, hints, mode="generate")
-    inv = _count_invalid(records, hints, lambda r: (r["model"], r["condition"]),
-                         mode="generate")
+    # Split per category: pooling VIR across categories is not meaningful, so
+    # each (model, condition) cell is emitted once per category present. With a
+    # single category today this yields exactly the old rows; cmdi/xss add their
+    # own rows once python records for them exist.
     out = []
-    for (model, cond), rate in vir.items():
-        out.append({"model": model, "category": "sql", "condition": cond,
-                    "mode": "generate", "scope": "python",
-                    "vir": _vir_stat(rate, inv.get((model, cond), 0))})
+    for cat in sorted({_category_of(r, cats) for r in records}):
+        sub = [r for r in records if _category_of(r, cats) == cat]
+        vir = M.vir_by_model_condition(sub, hints, mode="generate")
+        inv = _count_invalid(sub, hints,
+                             lambda r: (r["model"], r["condition"]),
+                             mode="generate")
+        for (model, cond), rate in vir.items():
+            out.append({"model": model, "category": cat, "condition": cond,
+                        "mode": "generate", "scope": "python",
+                        "vir": _vir_stat(rate, inv.get((model, cond), 0))})
     out.sort(key=lambda d: (M.natural_sort_key(d["model"]),
+                            d["category"],
                             _COND_ORDER.index(d["condition"])
                             if d["condition"] in _COND_ORDER else 99))
     return out
 
 
 def _by_language(records: list[dict], hints: set[tuple[str, str]],
-                 packs: dict[str, list[str]]) -> list[dict]:
+                 packs: dict[str, list[str]], cats: dict[str, str]) -> list[dict]:
     vir = M.vir_by_language(records, hints, condition="none")
     inv = _count_invalid(records, hints, M.record_language, mode="generate",
                          conditions=("none",))
+    # Category is the set of categories present in the language's records, so a
+    # per-language row states which categories it pools instead of "sql".
+    lang_cat = {lang: _row_category([r for r in records
+                                     if M.record_language(r) == lang], cats)
+                for lang in {M.record_language(r) for r in records}}
     out = []
     for lang, rate in vir.items():
         macro = M.macro_vir(records, hints, condition="none", language=lang)
-        out.append({"language": lang, "category": "sql", "condition": "none",
+        out.append({"language": lang, "category": lang_cat.get(lang, ""),
+                    "condition": "none",
                     "mode": "generate", "scope": "all-languages",
                     "packVersions": packs.get(lang, []),
                     "vir": _vir_stat(rate, inv.get(lang, 0)),
@@ -478,15 +521,20 @@ def _by_language(records: list[dict], hints: set[tuple[str, str]],
 
 
 def _by_model_language(records: list[dict], hints: set[tuple[str, str]],
-                       packs: dict[str, list[str]]) -> list[dict]:
+                       packs: dict[str, list[str]],
+                       cats: dict[str, str]) -> list[dict]:
     vir = M.vir_by_model_language(records, hints, condition="none")
     inv = _count_invalid(records, hints,
                          lambda r: (r["model"], M.record_language(r)),
                          mode="generate", conditions=("none",))
+    lang_cat = {lang: _row_category([r for r in records
+                                     if M.record_language(r) == lang], cats)
+                for lang in {M.record_language(r) for r in records}}
     order = {l: i for i, l in enumerate(M.languages_present(records))}
     out = []
     for (model, lang), rate in vir.items():
-        out.append({"model": model, "language": lang, "category": "sql",
+        out.append({"model": model, "language": lang,
+                    "category": lang_cat.get(lang, ""),
                     "condition": "none", "mode": "generate",
                     "scope": "all-languages",
                     "packVersions": packs.get(lang, []),
@@ -585,16 +633,17 @@ def _prompt_sensitivity(records: list[dict], hints: set[tuple[str, str]],
     return out
 
 
-def _contamination_delta(records: list[dict],
-                         hints: set[tuple[str, str]]) -> list[dict]:
+def _contamination_delta(records: list[dict], hints: set[tuple[str, str]],
+                         cats: dict[str, str]) -> list[dict]:
     cont = M.contamination_delta(records, hints)
     inv_clean = _count_invalid(records, hints, lambda r: r["model"],
                                mode="generate", conditions=("clean-repo",))
     inv_dirty = _count_invalid(records, hints, lambda r: r["model"],
                                mode="generate", conditions=("dirty-repo",))
+    cat = _row_category(records, cats)
     out = []
     for m, d in cont.items():
-        out.append({"model": m, "category": "sql",
+        out.append({"model": m, "category": cat,
                     "clean": _vir_stat(d["clean"], inv_clean.get(m, 0)),
                     "dirty": _vir_stat(d["dirty"], inv_dirty.get(m, 0)),
                     "delta": _num(d["delta"]), "pValue": _num(d["p_value"])})
@@ -602,17 +651,18 @@ def _contamination_delta(records: list[dict],
     return out
 
 
-def _brownfield_delta(records: list[dict],
-                      hints: set[tuple[str, str]]) -> list[dict]:
+def _brownfield_delta(records: list[dict], hints: set[tuple[str, str]],
+                      cats: dict[str, str]) -> list[dict]:
     brown = M.brownfield_delta(records, hints)
     inv_edit = _count_invalid(records, hints, lambda r: r["model"], mode="edit",
                               conditions=("clean-repo", "dirty-repo"))
     inv_gen = _count_invalid(records, hints, lambda r: r["model"],
                              mode="generate",
                              conditions=("clean-repo", "dirty-repo"))
+    cat = _row_category(records, cats)
     out = []
     for m, d in brown.items():
-        out.append({"model": m, "category": "sql",
+        out.append({"model": m, "category": cat,
                     "edit": _vir_stat(d["edit"], inv_edit.get(m, 0)),
                     "generate": _vir_stat(d["generate"], inv_gen.get(m, 0)),
                     "delta": _num(d["delta"])})
@@ -620,7 +670,8 @@ def _brownfield_delta(records: list[dict],
     return out
 
 
-def _safety_hint_delta(records: list[dict], hints: set[tuple[str, str]]) -> list[dict]:
+def _safety_hint_delta(records: list[dict], hints: set[tuple[str, str]],
+                       cats: dict[str, str]) -> list[dict]:
     hint_d = M.safety_hint_delta(records, hints)
     hinted_tasks = {t for (t, _) in hints}
     graded = [r for r in records if r["verdict"] == "invalid"]
@@ -634,9 +685,10 @@ def _safety_hint_delta(records: list[dict], hints: set[tuple[str, str]]) -> list
             inv_hint[r["model"]] += 1
         elif (r["task_id"] in hinted_tasks and r["condition"] in hint_conditions):
             inv_plain[r["model"]] += 1
+    cat = _row_category(records, cats)
     out = []
     for m, d in hint_d.items():
-        out.append({"model": m, "category": "sql",
+        out.append({"model": m, "category": cat,
                     "hint": _vir_stat(d["hint"], inv_hint.get(m, 0)),
                     "plain": _vir_stat(d["plain"], inv_plain.get(m, 0)),
                     "delta": _num(d["delta"])})
@@ -644,13 +696,34 @@ def _safety_hint_delta(records: list[dict], hints: set[tuple[str, str]]) -> list
     return out
 
 
-def _remediation(records: list[dict]) -> list[dict]:
+def _remediation(records: list[dict], cats: dict[str, str]) -> list[dict]:
     rem = M.remediation(records)
+    # A per-model remediation row pools that model's dirty-repo edit trials;
+    # the category is the set those trials cover ("sql" today).
+    edit_pop = [r for r in records
+                if r.get("mode") == "edit" and r["condition"] == "dirty-repo"]
+    cat = _row_category(edit_pop, cats)
     out = []
     for m, d in rem.items():
-        out.append({"model": m, "category": "sql", "n": d["n"],
+        out.append({"model": m, "category": cat, "n": d["n"],
                     "fix": _ratio(d["fix"], "fixed", "n"),
                     "flag": _ratio(d["flag"], "flagged", "n")})
+    out.sort(key=lambda d: M.natural_sort_key(d["model"]))
+    return out
+
+
+def _review_detection(records: list[dict], cats: dict[str, str]) -> list[dict]:
+    """Per model over review-mode trials: the prose flag rate from
+    metrics.review_detection. Its own results array (mode=review is excluded
+    from every VIR axis), python-scoped like the other headline arrays."""
+    rev = M.review_detection(records)
+    out = []
+    for m, rate in rev.items():
+        sub = [r for r in records
+               if r.get("mode") == "review" and r["model"] == m]
+        out.append({"model": m, "category": _row_category(sub, cats),
+                    "scope": "python",
+                    "flag": _ratio(rate, "flagged", "n")})
     out.sort(key=lambda d: M.natural_sort_key(d["model"]))
     return out
 
@@ -665,20 +738,25 @@ def _results(records: list[dict], hints: set[tuple[str, str]],
     # cross-language arrays below (byLanguage, byModelLanguage, byModelTask) keep
     # go/rust so the frontend can still build language views.
     py = [r for r in records if M.record_language(r) == "python"]
+    # Review-mode trials are python but must not enter the python VIR/invalid
+    # aggregates (they measure detection, not introduction); vir_by_* filter to
+    # mode=generate and invalid_by_model/flip_rate now skip review, so py can
+    # keep them, but the review flag rate gets its own array below.
     return {
-        "pooled": _pooled(py, hints),
+        "pooled": _pooled(py, hints, cats),
         "byModelCondition": _by_model_condition(py, hints, cats),
-        "byLanguage": _by_language(records, hints, packs),
-        "byModelLanguage": _by_model_language(records, hints, packs),
+        "byLanguage": _by_language(records, hints, packs, cats),
+        "byModelLanguage": _by_model_language(records, hints, packs, cats),
         "byModelTask": _by_model_task(records, hints, cats, task_lang),
         "categoryVerdicts": _category_verdicts(py, hints, cats),
         "invalidByModel": _invalid_by_model(py),
         "flipRate": _flip_rate(records),
         "promptSensitivity": _prompt_sensitivity(records, hints, cats, task_lang),
-        "contaminationDelta": _contamination_delta(records, hints),
-        "brownfieldDelta": _brownfield_delta(records, hints),
-        "safetyHintDelta": _safety_hint_delta(records, hints),
-        "remediation": _remediation(records),
+        "contaminationDelta": _contamination_delta(records, hints, cats),
+        "brownfieldDelta": _brownfield_delta(records, hints, cats),
+        "safetyHintDelta": _safety_hint_delta(records, hints, cats),
+        "remediation": _remediation(records, cats),
+        "reviewDetection": _review_detection(records, cats),
     }
 
 

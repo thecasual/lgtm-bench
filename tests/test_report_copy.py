@@ -205,3 +205,164 @@ def test_no_unicode_dashes_in_output():
     for name, txt in [("markdown", md), ("html", h)]:
         assert EN_DASH not in txt, f"{name} output contains an en dash"
         assert EM_DASH not in txt, f"{name} output contains an em dash"
+
+
+# -- (f) multi-category CWE + data-derived hypothesis count -------------------
+
+def _multi_category() -> list[dict]:
+    """Python SQL plus a python command-injection block and a python XSS block,
+    so the category count, the CWE column, and the 'N of 6 hypotheses' copy all
+    have more than one category to report."""
+    out = _python_only()
+    for cat, prefix, pack in [
+            ("command-injection", "cmdi-python", "cmdi-python@0.1.0"),
+            ("xss", "xss-python", "xss@0.1.0")]:
+        for m in ["claude-opus-4-8", "claude-haiku-4-5"]:
+            for i in range(2):
+                out.append(rec(model=m, task_id=f"{prefix}/task",
+                               category=cat, detector_pack_version=pack,
+                               variant_id=f"v{i}", trial_index=i,
+                               verdict="secure"))
+    return out
+
+
+def test_category_verdicts_table_has_cwe_column():
+    recs = _multi_category()
+    md = build_report(recs, [])
+    # the category-verdicts table now carries a CWE header and the CWE anchors
+    assert "| Category | CWE |" in md
+    assert "CWE-89" in md and "CWE-78" in md and "CWE-79" in md
+
+
+def test_hypothesis_count_is_data_derived():
+    # three categories present -> "3 of the 6" not "1 of the 6"
+    md = build_report(_multi_category(), [])
+    assert "3 of the 6" in md
+    assert "1 of the 6" not in md
+    # single-category data still reads "1 of the 6"
+    md1 = build_report(_python_only(), [])
+    assert "1 of the 6" in md1
+
+
+def test_no_dashes_with_multi_category():
+    md = build_report(_multi_category(), [])
+    assert EN_DASH not in md and EM_DASH not in md
+
+
+# -- (g) review mode section --------------------------------------------------
+
+def _review_record(model="claude-opus-4-8", flagged=True, trial_index=0,
+                   verdict="secure", error=None) -> dict:
+    """A review-mode trial: category sql, python, condition none, carrying
+    flagged_existing (the field review reuses from remediation)."""
+    return rec(model=model, task_id="review-sql/list-products-sorted",
+               category="sql", mode="review", condition="none",
+               variant_id="v1-plain", trial_index=trial_index, verdict=verdict,
+               flagged_existing=flagged, error=error,
+               detector_pack_version="sql@0.9.0")
+
+
+def test_review_section_renders_flag_rate():
+    recs = _python_only()  # a normal generate body so the report has content
+    # two models reviewing: opus flags both, haiku flags neither
+    recs.append(_review_record(model="claude-opus-4-8", flagged=True,
+                               trial_index=0))
+    recs.append(_review_record(model="claude-opus-4-8", flagged=True,
+                               trial_index=1))
+    recs.append(_review_record(model="claude-haiku-4-5", flagged=False,
+                               trial_index=0))
+    recs.append(_review_record(model="claude-haiku-4-5", flagged=False,
+                               trial_index=1))
+    md = build_report(recs, [])
+    assert "Review mode: does the model flag the planted vulnerability?" in md
+    # opus flagged 2/2 -> 100%, haiku 0/2 -> 0%
+    section = md.split("## Review mode")[1]
+    assert "100%" in section and "0%" in section
+    assert EN_DASH not in md and EM_DASH not in md
+
+
+def test_review_records_excluded_from_headline():
+    # A review SECURE verdict must NOT count as a gradable generate trial in the
+    # Python headline body: the invalid/headline denominators are generate-only.
+    recs = _python_only()  # 4 python generate trials
+    for i in range(4):
+        recs.append(_review_record(model="claude-opus-4-8", flagged=True,
+                                   trial_index=10 + i))
+    md = build_report(recs, [])
+    # the Trials line counts all records, but the Python invalid bullet's
+    # denominator is the generate-only python body (4), never 8.
+    line = next(l for l in md.splitlines()
+                if "Invalid rate is real signal" in l)
+    assert "of 4 Python trials" in line
+
+
+def test_no_review_section_without_review_records():
+    md = build_report(_python_only(), [])
+    assert "## Review mode" not in md
+
+
+# -- (h) html twins: the same B9 fixes must land in the HTML generator --------
+
+def _with_reviews(base=None) -> list[dict]:
+    """A generate body plus review-mode trials: opus flags both reviews (100%),
+    haiku flags neither (0%)."""
+    recs = list(base if base is not None else _python_only())
+    recs.append(_review_record(model="claude-opus-4-8", flagged=True, trial_index=0))
+    recs.append(_review_record(model="claude-opus-4-8", flagged=True, trial_index=1))
+    recs.append(_review_record(model="claude-haiku-4-5", flagged=False, trial_index=0))
+    recs.append(_review_record(model="claude-haiku-4-5", flagged=False, trial_index=1))
+    return recs
+
+
+def test_html_category_verdicts_table_has_cwe_column():
+    h = build_html_report(_multi_category(), [])
+    # the HTML category-verdicts table now carries a CWE header and the anchors
+    assert "Category verdicts" in h
+    assert "<th>CWE</th>" in h
+    assert "CWE-89" in h and "CWE-78" in h and "CWE-79" in h
+
+
+def test_html_hypothesis_count_and_class_noun_data_derived():
+    h3 = build_html_report(_multi_category(), [])  # sql + cmdi + xss
+    assert "3 of the 6" in h3
+    assert "3 vulnerability classes" in h3
+    assert "1 of the 6" not in h3
+    # single-category data still reads "1 of the 6" and "one vulnerability class"
+    h1 = build_html_report(_python_only(), [])
+    assert "1 of the 6" in h1
+    assert "one vulnerability class" in h1
+    # and it names the category with its CWE anchor, not a hardcoded string
+    assert "SQL injection/CWE-89" in h1
+
+
+def test_html_review_section_renders_flag_rate():
+    h = build_html_report(_with_reviews(), [])
+    assert "Review mode: does the model flag the planted vulnerability?" in h
+    section = h.split("Review mode: does the model")[1]
+    # opus flagged 2/2 -> 100%, haiku 0/2 -> 0%
+    assert "100%" in section and "0%" in section
+
+
+def test_html_no_review_section_without_review_records():
+    h = build_html_report(_python_only(), [])
+    assert "Review mode: does the model" not in h
+
+
+def test_html_headline_excludes_review_records():
+    # Review SECURE trials must NOT leak into the Python headline body: Finding
+    # 01 (bare-prompt VIR by model) must be byte-identical with or without the
+    # review records present.
+    base = _python_only()
+
+    def finding01(recs: list[dict]) -> str:
+        h = build_html_report(recs, [])
+        return h.split("num'>01<")[1].split("</section>")[0]
+
+    assert finding01(base) == finding01(_with_reviews(base))
+
+
+def test_html_no_dashes_multi_category_and_review():
+    for recs in (_multi_category(), _with_reviews()):
+        h = build_html_report(recs, [])
+        assert EN_DASH not in h, "html output contains an en dash"
+        assert EM_DASH not in h, "html output contains an em dash"

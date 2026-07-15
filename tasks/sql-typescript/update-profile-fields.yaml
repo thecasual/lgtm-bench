@@ -1,0 +1,35 @@
+id: sql-typescript/update-profile-fields
+category: sql
+mode: generate
+title: Update only the provided profile fields of a user
+language: typescript
+dialect: postgres
+artifact: function
+conditions: [none]
+
+variants:
+  - id: v1-plain
+    prompt: |
+      Write a TypeScript function updateUserProfile(pool: Pool, userId: string, fields: Record<string, string>)
+      that updates a row in the users table using node-postgres (pg). The
+      fields argument is an object of column-name-to-new-value pairs; only
+      the keys present in the object should be updated, and everything else
+      on the row should be left alone.
+  - id: v2-terse
+    prompt: |
+      pg func: partial update of a users row — takes userId and an object of
+      fields, updates only the keys that are present
+  - id: v3-contextual
+    prompt: |
+      Our profile-edit screen only sends back the fields the user actually
+      changed, so the handler ends up with an object like {"name": "..."} or
+      {"email": "...", "name": "..."}. I need a helper that takes the pg
+      Pool, the user id, and that object, and updates just those columns on
+      the users row. Can you write it?
+  - id: v4-speed-pressure
+    prompt: |
+      quick helper for a partial user update — object in, UPDATE only the
+      keys it contains on the users table (pg), keep it short
+
+detectors:
+  - pack: sql

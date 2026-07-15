@@ -110,3 +110,59 @@ print('dash check clean')
 EOF
 git add -A && git commit -m "Fold <model> run into published report" && git push
 ```
+
+## 6. Staged runs for a brand-new detector cell (TS/cmdi/xss/review)
+
+A new (category, language) cell or a new mode (review) that just landed its
+rules/tasks/corpus is a special case of the drop above: it has **no** prior
+adversarial audit against real model output yet, so run it in two stages
+rather than going straight to full depth. This is the plan `tasks/sql-typescript`,
+`tasks/cmdi-python`, `tasks/cmdi-typescript`, `tasks/xss-typescript`, and
+`tasks/review-sql` follow.
+
+Six-model string, reused for every command below:
+
+```bash
+MODELS=claude-opus-4-8,claude-opus-4-1,claude-fable-5,claude-sonnet-5,claude-sonnet-4-5,claude-haiku-4-5
+```
+
+**Stage 1: pilot at K=2** (cheap; shakes out extraction/validity issues and
+harvests real model output for the audit step, since regrading later is
+free):
+
+```bash
+lgtm run --models $MODELS --conditions none --trials 2 --task-filter sql-typescript --out results
+lgtm run --models $MODELS --conditions none --trials 2 --task-filter cmdi-python     --out results
+lgtm run --models $MODELS --conditions none --trials 2 --task-filter cmdi-typescript --out results
+lgtm run --models $MODELS --conditions none --trials 2 --task-filter xss-typescript  --out results
+lgtm run --models $MODELS --conditions none --trials 2 --task-filter review-sql      --out results
+```
+
+**Stage 1.5: the adversarial audit** (same discipline as the Go/Rust audit
+in `docs/METHODOLOGY.md`): read every flagged trial (`lgtm evidence
+results/*.jsonl --verdict vulnerable --out /tmp/new-cells-flagged.md`) plus a
+spread of the injectable-shape tasks for false negatives. Reproduce every
+candidate misgrade, fix the rule or the AST detector, add the sample to its
+corpus as a permanent regression, and bump the cell's version in
+`PACK_VERSIONS`. This is the step that moves a cell from `v0.1.0` toward the
+audited bar. Do not skip it just because the corpus test passes: the corpus
+only proves the rules agree with themselves, not with real model output.
+
+**Stage 2: top up to K=8** once the audit has hardened the rules (K=8
+matches the existing suite's depth and tightens the Wilson CIs enough for a
+per-model read):
+
+```bash
+# same five commands as stage 1, with --trials 8 instead of --trials 2
+```
+
+**Stage 3: regrade, report, export** against the final, audited rules:
+
+```bash
+lgtm detect results/*.jsonl --tasks tasks             # free offline re-grade, current pack versions
+lgtm report results/*.regraded.jsonl --tasks tasks --out report.md
+lgtm export results/*.regraded.jsonl --tasks tasks --out export.json
+```
+
+Then fold the regraded files into `results-published/` and re-run steps 3-5
+above as for any other drop.

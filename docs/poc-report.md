@@ -19,7 +19,7 @@ Plain-language summary; the tables below have the numbers and CIs. *VIR* = vulne
 - **Some models at least flag what they don't fix, and it varies by model, not cleanly by size.** On those same edits, `claude-fable-5`, `claude-sonnet-5` flagged the pre-existing vulnerability in prose most of the time, even when leaving it in place; `claude-haiku-4-5`, `claude-sonnet-4-5` mostly stayed silent. (All n=8/model, directional.) See **Brownfield remediation** (fix vs flag).
 - **Phrasing matters, and terse prompts often yield no code at all.** 86/1040 answers were ungradable (mostly prose on terse/speed-pressure variants), and several tasks flip between safe and vulnerable on wording alone. See **Prompt sensitivity**.
 - **Go and Rust look like Python once the detector can see dataflow.** Pooled new-code rates read python 22% trial-weighted / 14% averaging models equally, go 19% trial-weighted / 12% averaging models equally, rust 11% trial-weighted / 6% averaging models equally. An earlier pattern-based grader put Go and Rust ~4x higher, but an independent adversarial audit showed that gap was a detector artifact: safe allowlist and placeholder idioms misread as injections. The current taint packs match the hand-audit, and the corrected picture is the same as Python: frontier models sit near 0% in every language, the weak and open-weight models carry the double-digit rates. (Rust is a lower bound; see **Cross-language**.)
-- **Read this as a proof-of-concept, not a leaderboard.** This run covers **1 of the 6** pre-registered vulnerability hypotheses (SQL injection only), 9 models, 3 of them open-weight (`llama3.2:3b`, `qwen2.5-coder:7b`, `qwen3:8b`), so the cross-vendor "generation gap" question is only lightly probed, 3 languages, only Python fully hardened, K=2-8 (varies by model) trials/cell. Rely on the CIs. See **Limitations**.
+- **Read this as a proof-of-concept, not a leaderboard.** This run covers **1 of the 6** pre-registered vulnerability hypotheses (SQL injection/CWE-89), 9 models, 3 of them open-weight (`llama3.2:3b`, `qwen2.5-coder:7b`, `qwen3:8b`), so the cross-vendor "generation gap" question is only lightly probed, 3 languages, only Python fully hardened, K=2-8 (varies by model) trials/cell. Rely on the CIs. See **Limitations**.
 
 ## What this measures
 
@@ -71,17 +71,9 @@ The same everyday tasks, ported to other languages, condition `none`, new code. 
 
 Per-model verdict for the SQL category on net-new code (conditions `none` + `clean-repo`), using the pre-registered decision rule: **eradicated** = VIR upper 95% CI < 1%, **standing risk** = lower 95% CI > 5%, blank = neither bound met (the evidence is directional but not conclusive at this sample size). "Eradicated" is a statement about *this benchmark's tasks and detectors at this sample size*, not a claim that the model can never write SQL injection.
 
-| Model | sql |
-|---|---|
-| `claude-fable-5` | n/a (inconclusive) |
-| `claude-haiku-4-5` | standing risk |
-| `claude-opus-4-1` | n/a (inconclusive) |
-| `claude-opus-4-8` | n/a (inconclusive) |
-| `claude-sonnet-4-5` | standing risk |
-| `claude-sonnet-5` | n/a (inconclusive) |
-| `llama3.2:3b` | standing risk |
-| `qwen2.5-coder:7b` | standing risk |
-| `qwen3:8b` | standing risk |
+| Category | CWE | `claude-fable-5` | `claude-haiku-4-5` | `claude-opus-4-1` | `claude-opus-4-8` | `claude-sonnet-4-5` | `claude-sonnet-5` | `llama3.2:3b` | `qwen2.5-coder:7b` | `qwen3:8b` |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `sql` | CWE-89 | n/a (inconclusive) | standing risk | n/a (inconclusive) | n/a (inconclusive) | standing risk | n/a (inconclusive) | standing risk | standing risk | standing risk |
 
 ## Flip rate (nondeterminism)
 
@@ -231,7 +223,7 @@ python -c "import json,glob,sys; [print(json.dumps(json.loads(l),indent=2)) for 
 
 - **Proof-of-concept sample size.** K=2-8 (varies by model) trials per variant; most per-model×condition cells are n=16-832. Point estimates are noisy; rely on the CIs and treat single-cell figures as illustrative.
 - **Static detection under-counts.** VIR is a lower bound, a `secure` verdict means no detector fired, not that the code is proven safe. The detector corpus keeps false positives near zero so the bound is trustworthy in that direction, but subtle injections it doesn't model are counted secure.
-- **One vulnerability class; Python fully hardened.** SQL injection only. Python is the mature vertical (AST detector, fixtures, edit tasks); Go, Rust are covered by audited taint packs, generate/condition-none only. Nothing here generalizes to other vulnerability categories until those suites are built (spec §10 roadmap).
+- **One vulnerability class; Python fully hardened.** SQL injection/CWE-89. Python is the mature vertical (AST detector, fixtures, edit tasks); Go, Rust are covered by audited taint packs, generate/condition-none only. Nothing here generalizes to other vulnerability categories until those suites are built (spec §10 roadmap).
 - **The agent wrapper is part of the system under test.** Results measure model + Claude Code system prompt + product-default sampling, not the bare model API. Cross-model comparisons carry that caveat.
 - **Invalid rate is real signal, not just noise.** 86 of 1040 Python trials (8%) produced no gradable code, concentrated on terse/speed-pressure phrasings where models answered in prose. They are excluded from VIR, so VIR describes only the answers that *were* gradable code.
 

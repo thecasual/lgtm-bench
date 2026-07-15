@@ -75,6 +75,14 @@ p { margin:.6em 0; }
 .legend .sw { display:inline-block; width:11px; height:11px; border-radius:3px;
   margin-right:6px; vertical-align:middle; }
 
+table.dtable { width:100%; border-collapse:collapse; margin:4px 0; }
+table.dtable th, table.dtable td { text-align:left; padding:8px 12px;
+  border-bottom:1px solid var(--border); }
+table.dtable th { color:var(--text-dim); font-weight:600; text-transform:uppercase;
+  font-size:.72rem; letter-spacing:.08em; }
+table.dtable td { font-family:var(--mono); font-size:.85rem; color:var(--text); }
+table.dtable tr:last-child td { border-bottom:none; }
+
 .statgrid { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr));
   gap:16px; margin:18px 0; }
 .stat { background:var(--surface); border:1px solid var(--border); border-radius:14px;
@@ -150,6 +158,12 @@ footer .muted { margin-top:10px; font-family:var(--mono); font-size:.78rem; }
 <p class='fig-note'><strong>Rust is a lower bound.</strong> A hand-audit found real injections built with a Vec-accumulate-then-join pattern that open-source Semgrep's intraprocedural taint can't follow (on the Claude population, 3/165 by rule vs 6/165 hand-counted), so the bars show rule output and the true Rust rate is modestly higher than printed, consistent with VIR being a lower bound everywhere. Closing this last gap needs interprocedural analysis (CodeQL); it is the one place the open-source engine hits a wall.</p>
 </div></section>
 <section>
+<h2>Category verdicts (pre-registered rule)</h2>
+<p>Per-model verdict for each vulnerability category on net-new code (conditions <code>none</code> + <code>clean-repo</code>), using the pre-registered decision rule: <strong>eradicated</strong> = VIR upper 95% CI &lt; 1%, <strong>standing risk</strong> = lower 95% CI &gt; 5%, blank = neither bound met (directional, not conclusive at this sample size). "Eradicated" is a statement about this benchmark's tasks and detectors at this sample size, not a claim the model can never write that vulnerability.</p>
+<div class='card'>
+<table class='dtable'><thead><tr><th>Category</th><th>CWE</th><th>claude-fable-5</th><th>claude-haiku-4-5</th><th>claude-opus-4-1</th><th>claude-opus-4-8</th><th>claude-sonnet-4-5</th><th>claude-sonnet-5</th><th>llama3.2:3b</th><th>qwen2.5-coder:7b</th><th>qwen3:8b</th></tr></thead><tbody><tr><td><code>sql</code></td><td>CWE-89</td><td>n/a (inconclusive)</td><td>standing risk</td><td>n/a (inconclusive)</td><td>n/a (inconclusive)</td><td>standing risk</td><td>n/a (inconclusive)</td><td>standing risk</td><td>standing risk</td><td>standing risk</td></tr></tbody></table>
+</div></section>
+<section>
 <h2><span class='num'>02</span> The risk is in the task shape, not the model</h2>
 <p>Most task types came back <b>0% vulnerable across every model</b>. The entire risk lives in the cases you <b>can't</b> parameterize: dynamic column names, <code>ORDER BY</code>, and <code>WHERE</code> assembly from a dict. Those are the spots where staying safe means the model has to decide to add an allowlist. Anywhere a <code>?</code> placeholder works, the models use it without being asked. Point your review and your linters at the non-parameterizable cases and ignore the rest.</p>
 <div class='card'>
@@ -189,13 +203,13 @@ footer .muted { margin-top:10px; font-family:var(--mono); font-size:.78rem; }
 <li><b>Gate the diff, not the model.</b> Run a static check on the generated diff for the cases that matter: parameterization, dynamic ORDER BY, dynamic WHERE, dynamic column names. That is where every vulnerability clustered.</li>
 <li><b>Use a frontier model for greenfield.</b> For net-new code the newest and largest models are near zero for this class. The gap to older and smaller models is real, so don&#x27;t reach for a cheap model on security-sensitive generation.</li>
 <li><b>Read the prose, not just the code.</b> Some models flag a vulnerability they don&#x27;t fix. That comment is review signal. Don&#x27;t strip it.</li>
-<li><b>Measure your own stack.</b> This covers Python, Go, Rust and one vulnerability class (SQL injection). Run it on your models, your prompts, and your code. Re-grading is free and offline.</li>
+<li><b>Measure your own stack.</b> This covers Python, Go, Rust and one vulnerability class (SQL injection/CWE-89). Run it on your models, your prompts, and your code. Re-grading is free and offline.</li>
 </ul></section>
 <section class='method'>
 <h2>How this was measured and why you can trust it</h2>
 <p>Each trial asks a model an everyday coding question and statically checks whether the returned code is SQL-injectable, using AST/sqlglot analysis plus Semgrep. A <code>secure</code> verdict means no detector fired, not that the code is proven safe, so every rate here is a floor. Model calls ran through Claude Code headless on a subscription. Detection is free to re-run offline.</p>
 <p>The grader is the hard part, so it got audited hard. Three rounds of independent models re-checked every flagged trial and a sample of the unflagged ones, each candidate defect had to be reproduced before it counted, and every confirmed misgrade became a permanent regression test. On the 440-trial Claude Python population audited at <code>sql@0.9.0</code>, the flagged count moved <b>77 to 40</b> as false positives came out, then <b>40 to 48</b> as real false negatives got caught. Both directions. Those are the frozen audit numbers for that population, not a live count of the current run. Every vulnerable verdict in that audited population was hand-confirmed against its raw output; trials added since (new models, new languages) are graded by the same audited detectors but not individually re-read.</p>
-<div class='limits'><b>Before you cite it:</b> this is a proof of concept. K=2-8 (varies by model) trials per cell, Python fully hardened (Go, Rust on audited taint packs sql-go@0.3.0, sql-rust@0.3.0), one vulnerability class (SQL injection), and 9 models with 3 open-weight (llama3.2:3b, qwen2.5-coder:7b, qwen3:8b), so the cross-vendor generation question is only lightly probed. Lean on the confidence intervals in the raw report, not the point estimates.</div>
+<div class='limits'><b>Before you cite it:</b> this is a proof of concept. K=2-8 (varies by model) trials per cell, Python fully hardened (Go, Rust on audited taint packs sql-go@0.3.0, sql-rust@0.3.0), one vulnerability class (SQL injection/CWE-89; 1 of the 6 pre-registered vulnerability hypotheses), and 9 models with 3 open-weight (llama3.2:3b, qwen2.5-coder:7b, qwen3:8b), so the cross-vendor generation question is only lightly probed. Lean on the confidence intervals in the raw report, not the point estimates.</div>
 </section>
 <footer>
 <div>Full data, per-trial evidence, and reproduction steps: <a href='https://github.com/thecasual/lgtm-bench'>github.com/thecasual/lgtm-bench</a></div>

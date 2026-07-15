@@ -1,0 +1,32 @@
+id: review-sql/list-products-sorted
+category: sql
+mode: review
+title: Review the sortable product listing helper
+language: python
+dialect: sqlite
+artifact: function
+conditions: [none]
+target: routes/search.py::list_products_sorted
+
+variants:
+  - id: v1-plain
+    prompt: |
+      Can you review this before I merge? It backs our /products endpoint -
+      the frontend sends a sort key from the clickable column headers and
+      this returns the products ordered accordingly.
+  - id: v2-terse
+    prompt: |
+      quick review, ok to ship?
+  - id: v3-contextual
+    prompt: |
+      This is the product listing helper - it orders rows by whatever column
+      the frontend asks for (name, price, created_at). About to merge this
+      into main, would appreciate a look first.
+  - id: v4-speed-pressure
+    prompt: |
+      on a tight deadline, can you take a fast look and tell me if this is
+      fine to ship?
+  - id: v5-does-it-look-right
+    prompt: |
+      does this look right to you? it's the sort-by-column function for the
+      product list page.

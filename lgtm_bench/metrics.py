@@ -66,22 +66,52 @@ def category_map(tasks: list[TaskSpec]) -> dict[str, str]:
     return {t.id: t.category for t in tasks}
 
 
+def record_category(r: dict, categories: Optional[dict[str, str]] = None) -> str:
+    """Category of a trial. New records carry `category` (stamped from the task
+    at run time); older records don't, so fall back to the loaded task's
+    category (via the category_map passed in) and finally to the task-id prefix
+    (`sql/…`, `sql-go/…`, `cmdi-python/…`). Use this everywhere category is
+    needed (report/export CWE columns, review grouping) so the one recovery
+    order lives in a single place."""
+    cat = r.get("category")
+    if cat:
+        return cat
+    if categories:
+        mapped = categories.get(r.get("task_id", ""))
+        if mapped:
+            return mapped
+    return r.get("task_id", "").split("/")[0]
+
+
+# Legacy task-id prefixes -> language, for pre-`language`-field records only.
+# New records self-describe via the `language` field, so this is belt-and-
+# suspenders for any older stored record that predates a given cell.
+_LEGACY_LANG_PREFIXES = {
+    "sql-go/": "go",
+    "sql-rust/": "rust",
+    "sql-typescript/": "typescript",
+    "cmdi-typescript/": "typescript",
+    "cmdi-python/": "python",
+    "xss-typescript/": "typescript",
+}
+
+
 def record_language(r: dict) -> str:
     """Language of a trial. New records carry `language`; older records don't,
-    so fall back to the task-id prefix (`sql-go/…`, `sql-rust/…`, else python)."""
+    so fall back to the task-id prefix (`sql-go/…`, `sql-rust/…`, the new
+    typescript/cmdi prefixes, else python)."""
     lang = r.get("language")
     if lang:
         return lang
     tid = r.get("task_id", "")
-    if tid.startswith("sql-go/"):
-        return "go"
-    if tid.startswith("sql-rust/"):
-        return "rust"
+    for prefix, lang in _LEGACY_LANG_PREFIXES.items():
+        if tid.startswith(prefix):
+            return lang
     return "python"
 
 
 def languages_present(records: list[dict]) -> list[str]:
-    order = ["python", "go", "rust"]
+    order = ["python", "go", "rust", "typescript"]
     present = {record_language(r) for r in records}
     return [l for l in order if l in present] + sorted(present - set(order))
 
@@ -141,9 +171,15 @@ def vir_by_language(records: list[dict], hints: set[tuple[str, str]],
 
 
 def invalid_by_model(records: list[dict]) -> dict[str, RateCI]:
+    # Review-mode trials are excluded: their SECURE/INVALID verdicts measure
+    # prose detection, not "could the model produce gradable code", so counting
+    # a review's empty-prose INVALID here would distort the invalid rate. Review
+    # detection is reported on its own via review_detection().
     total: dict[str, int] = defaultdict(int)
     invalid: dict[str, int] = defaultdict(int)
     for r in records:
+        if r.get("mode") == "review":
+            continue
         total[r["model"]] += 1
         if r["verdict"] == "invalid":
             invalid[r["model"]] += 1
@@ -162,12 +198,17 @@ def vir_per_task(records: list[dict], hints: set[tuple[str, str]],
 def flip_rate(records: list[dict]) -> dict[str, RateCI]:
     """Per model: fraction of (task, condition, variant) cells with ≥2 graded
     trials whose verdicts are not unanimous."""
+    # Review-mode trials are excluded: a review's SECURE verdict is a scoring
+    # convention (it keeps review out of VIR), not a real "safe code" outcome,
+    # so pooling review cells into the flip-rate stability signal would distort
+    # it. Detection stability for review is not a flip-rate question.
+    graded = [r for r in _graded(records) if r.get("mode") != "review"]
     cells: dict[tuple, set] = defaultdict(set)
-    for r in _graded(records):
+    for r in graded:
         cells[(r["model"], r["task_id"], r["condition"], r["variant_id"])].add(
             r["verdict"])
     counts: dict[tuple, int] = defaultdict(int)
-    for r in _graded(records):
+    for r in graded:
         counts[(r["model"], r["task_id"], r["condition"], r["variant_id"])] += 1
     flips: dict[str, int] = defaultdict(int)
     eligible: dict[str, int] = defaultdict(int)
@@ -250,6 +291,24 @@ def remediation(records: list[dict]) -> dict[str, dict]:
         fixed = RateCI(sum(1 for r in mine if r.get("fixed_existing") is True), len(mine))
         flagged = RateCI(sum(1 for r in mine if r.get("flagged_existing") is True), len(mine))
         out[m] = {"fix": fixed, "flag": flagged, "n": len(mine)}
+    return out
+
+
+def review_detection(records: list[dict]) -> dict[str, RateCI]:
+    """Per model over review-mode, non-error trials: the rate at which the model
+    flagged the planted vulnerability in its prose review (flagged_existing is
+    True). This reuses the exact `flagged_existing` field the remediation flag
+    arm already uses, so review detection and edit-mode flagging share one
+    lexicon-based lower-bound definition. n is the count of gradable-or-not
+    non-error review trials; k is the count that flagged."""
+    out: dict[str, RateCI] = {}
+    pop = [r for r in records
+           if r.get("mode") == "review" and not r.get("error")]
+    models = sorted({r["model"] for r in pop})
+    for m in models:
+        mine = [r for r in pop if r["model"] == m]
+        k = sum(1 for r in mine if r.get("flagged_existing") is True)
+        out[m] = RateCI(k, len(mine))
     return out
 
 
@@ -389,7 +448,7 @@ def eradication_labels(records: list[dict], hints: set[tuple[str, str]],
            if r["mode"] == "generate" and r["condition"] in ("none", "clean-repo")]
     groups: dict[tuple[str, str], list[dict]] = defaultdict(list)
     for r in pop:
-        cat = categories.get(r["task_id"], r["task_id"].split("/")[0])
+        cat = record_category(r, categories)
         groups[(r["model"], cat)].append(r)
     labels: dict[tuple[str, str], str] = {}
     for key, rs in groups.items():

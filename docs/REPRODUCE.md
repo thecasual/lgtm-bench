@@ -75,6 +75,37 @@ lgtm evidence results/*.jsonl --verdict vulnerable --out audit.md
 lgtm detect results/run-<hash>.jsonl --tasks tasks --out regraded.jsonl
 ```
 
+## 4. The category/language cells beyond Python SQL
+
+`--task-filter` also selects the other task packs, one `lgtm run` per cell (a
+pilot at `--trials 2` is enough to confirm the pipeline; `docs/RUNBOOK.md` §6
+has the full staged pilot-then-audit-then-top-up plan these cells follow):
+
+```bash
+MODELS=claude-opus-4-8,claude-opus-4-1,claude-fable-5,claude-sonnet-5,claude-sonnet-4-5,claude-haiku-4-5
+
+# SQL in Go, Rust, TypeScript (Semgrep taint mode; no AST backstop, so semgrep is required)
+lgtm run --models $MODELS --conditions none --trials 2 --task-filter sql-go          --out results
+lgtm run --models $MODELS --conditions none --trials 2 --task-filter sql-rust        --out results
+lgtm run --models $MODELS --conditions none --trials 2 --task-filter sql-typescript  --out results
+
+# Command injection: Python (AST detector), TypeScript (Semgrep taint)
+lgtm run --models $MODELS --conditions none --trials 2 --task-filter cmdi-python     --out results
+lgtm run --models $MODELS --conditions none --trials 2 --task-filter cmdi-typescript --out results
+
+# Cross-site scripting: TypeScript (Semgrep taint)
+lgtm run --models $MODELS --conditions none --trials 2 --task-filter xss-typescript  --out results
+
+# Review mode: prose-only, model shown a planted vulnerability, no rewrite
+lgtm run --models $MODELS --conditions none --trials 2 --task-filter review-sql      --out results
+```
+
+`sql-go`, `sql-rust`, `sql-typescript`, `cmdi-typescript`, and `xss-typescript`
+have no fallback AST detector: they require a working `semgrep` binary
+(`pip install semgrep`, or set `LGTM_SEMGREP_BIN`) and fail loudly rather than
+silently grading everything secure if it's missing. `cmdi-python` is the one
+exception among the new cells: it is AST-only, no semgrep dependency at all.
+
 ## Glossary
 
 | Term | Meaning |
@@ -82,7 +113,8 @@ lgtm detect results/run-<hash>.jsonl --tasks tasks --out regraded.jsonl
 | **VIR** | Vulnerability Introduction Rate: share of *gradable* answers that contain an injection. A lower bound (static detection under-counts). |
 | **condition `none`** | Bare prompt, no repository context, all tools disabled (pure generation). |
 | **`clean-repo` / `dirty-repo`** | The model works inside a fixture repo that is either safe or already contains vulnerable code. |
-| **generate vs edit task** | `generate` = write new code; `edit` = modify an existing function for an unrelated reason (measures brownfield remediation). |
+| **generate vs edit vs review task** | `generate` = write new code; `edit` = modify an existing function for an unrelated reason (measures brownfield remediation); `review` = look at an existing function with a planted vulnerability and answer in prose only, no rewrite (measures detection, reported separately, never mixed into VIR). |
+| **category / CWE** | The vulnerability class a task tests (`sql`, `command-injection`, `xss`), each anchored to a CWE id (CWE-89, CWE-78, CWE-79) in `lgtm_bench/categories.py`. Independent of language: `sql-typescript/*` tasks are category `sql`, language `typescript`. |
 | **fix rate / flag rate** | On edit tasks: did the model silently *fix* a pre-existing vulnerability, and/or *flag* it in prose? |
 | **flip rate** | Share of (task × condition × variant) cells where identical repeated prompts produced *different* verdicts: nondeterminism. |
 | **safety-hint variant** | A prompt variant that explicitly asks for secure code; reported separately, never mixed into headline VIR. |

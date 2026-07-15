@@ -57,6 +57,7 @@ _LANG_ALIASES = {
     "sql": {"sql", "sqlite", "postgres", "postgresql", "mysql"},
     "go": {"go", "golang"},
     "rust": {"rust", "rs"},
+    "typescript": {"typescript", "ts", "tsx", "javascript", "js", "node"},
 }
 
 

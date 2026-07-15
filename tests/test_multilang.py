@@ -20,10 +20,11 @@ from lgtm_bench.schema import (ArtifactKind, Condition, TaskSpec, TrialRecord,
 
 CORPUS = Path(__file__).resolve().parent / "detector_corpus"
 
-# Matches "sql@0.9.0", "sql-go@0.3.0", "sql-rust@0.3.0" and future bumps of
-# each, but not a version string that silently reverts to an unversioned
-# fallback (see pack_version()'s "{name}@unversioned" default).
-_PACK_VERSION_RE = re.compile(r"^sql(-go|-rust)?@\d+\.\d+\.\d+$")
+# Matches a friendly pack slug of the shape "<slug>@x.y.z" (e.g. "sql@0.9.0",
+# "sql-go@0.3.0", "cmdi-python@0.1.0", "xss-typescript@0.1.0") but NOT a string
+# that silently reverts to an unversioned fallback (see pack_version()'s
+# "{name}@unversioned" default).
+_PACK_VERSION_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*@\d+\.\d+\.\d+$")
 
 # The go/rust detector tests below (and test_corpus_go.py / test_corpus_rust.py)
 # are the ONLY guard against det-1 (get_pack silently returning an empty
@@ -73,6 +74,11 @@ def test_pack_version_for_by_language():
     assert pack_version_for("sql", "python") == PACK_VERSIONS["sql"]
     assert pack_version_for("sql", "go") == PACK_VERSIONS["sql-go"]
     assert pack_version_for("sql", "rust") == PACK_VERSIONS["sql-rust"]
+    # The new language-qualified cells resolve to their friendly slugs too:
+    # a typescript SQL cell and a python command-injection cell.
+    assert pack_version_for("sql", "typescript") == PACK_VERSIONS["sql-typescript"]
+    assert (pack_version_for("command-injection", "python")
+            == PACK_VERSIONS["command-injection-python"])
     # Format check: every pack version string must look like name@x.y.z, so
     # a bump that produces e.g. an unversioned fallback ("sql-go@unversioned")
     # can't trivially satisfy the equality checks above by coincidence.

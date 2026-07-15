@@ -9,9 +9,13 @@ from .semgrep import SemgrepDetector, semgrep_available
 from .sql_ast import SqlAstDetector
 
 PACK_VERSIONS = {
-    "sql": "sql@0.9.0",
-    "sql-go": "sql-go@0.3.0",
-    "sql-rust": "sql-rust@0.3.0",
+    "sql":                          "sql@0.9.0",
+    "sql-go":                       "sql-go@0.3.0",
+    "sql-rust":                     "sql-rust@0.3.0",
+    "sql-typescript":               "sql-typescript@0.1.0",
+    "command-injection-python":     "cmdi-python@0.1.0",
+    "command-injection-typescript": "cmdi-typescript@0.1.0",
+    "xss-typescript":               "xss-typescript@0.1.0",
 }
 
 
@@ -24,26 +28,26 @@ def _semgrep_rules(filename: str) -> Path:
 
 
 def _require_semgrep_pack(language: str, rules_filename: str) -> list[Detector]:
-    """Build the go/rust pack, or raise RuntimeError rather than silently
+    """Build a semgrep-backed pack, or raise RuntimeError rather than silently
     returning an empty detector list.
 
-    Unlike python, go/rust have no AST backstop detector: semgrep is the ONLY
-    detector for these languages. Returning an empty list here used to mean
-    every go/rust trial graded "secure" by default while grading.py still
-    stamped the trial with the audited pack version (sql-go@0.3.0 /
-    sql-rust@0.3.0), as if the rules had actually run. Fail loud instead."""
+    Unlike python (which has an AST backstop detector), the semgrep-backed
+    languages have NO backstop: semgrep is the ONLY detector for these cells.
+    Returning an empty list here used to mean every such trial graded "secure"
+    by default while grading.py still stamped the trial with the audited pack
+    version, as if the rules had actually run. Fail loud instead."""
     rules = _semgrep_rules(rules_filename)
     if not semgrep_available():
         raise RuntimeError(
-            f"cannot build the sql-{language} detector pack: no semgrep binary "
-            "found. go/rust have no AST backstop, so semgrep is required to "
-            "grade this language at all. Fix by installing semgrep, or by "
-            "pointing LGTM_SEMGREP_BIN at an existing install (this sandbox "
-            "ships one at /opt/semgrep-venv/bin/semgrep)."
+            f"cannot build the {rules_filename} detector pack: no semgrep "
+            "binary found. This cell has no AST backstop, so semgrep is "
+            "required to grade this language at all. Fix by installing "
+            "semgrep, or by pointing LGTM_SEMGREP_BIN at an existing install "
+            "(this sandbox ships one at /opt/semgrep-venv/bin/semgrep)."
         )
     if not rules.exists():
         raise RuntimeError(
-            f"cannot build the sql-{language} detector pack: rules file "
+            f"cannot build the {rules_filename} detector pack: rules file "
             f"missing at {rules}. Fix by restoring "
             f"rules/semgrep/{rules_filename} in the repo."
         )
@@ -51,19 +55,36 @@ def _require_semgrep_pack(language: str, rules_filename: str) -> list[Detector]:
 
 
 def get_pack(name: str, language: str = "python") -> list[Detector]:
-    if name != "sql":
-        raise KeyError(f"unknown detector pack: {name}")
-    if language == "python":
-        detectors: list[Detector] = [SqlAstDetector()]
-        rules = _semgrep_rules("sql.yaml")
-        if semgrep_available() and rules.exists():
-            detectors.append(SemgrepDetector(rules))
-        return detectors
-    if language == "go":
-        return _require_semgrep_pack("go", "sql_go.yaml")
-    if language == "rust":
-        return _require_semgrep_pack("rust", "sql_rust.yaml")
-    raise KeyError(f"unsupported language for pack {name!r}: {language}")
+    if name == "sql":
+        if language == "python":
+            detectors: list[Detector] = [SqlAstDetector()]
+            rules = _semgrep_rules("sql.yaml")
+            if semgrep_available() and rules.exists():
+                detectors.append(SemgrepDetector(rules))
+            return detectors
+        if language == "go":
+            return _require_semgrep_pack("go", "sql_go.yaml")
+        if language == "rust":
+            return _require_semgrep_pack("rust", "sql_rust.yaml")
+        if language == "typescript":
+            return _require_semgrep_pack("typescript", "sql_typescript.yaml")
+        raise KeyError(f"unsupported language for pack {name!r}: {language}")
+    if name == "command-injection":
+        if language == "python":
+            # AST-only, no semgrep companion. Lazy import: the leaf detector
+            # file arrives in a later package, so importing at module load
+            # would break this whole module before that file exists.
+            from .cmdi_ast import CmdiAstDetector
+            return [CmdiAstDetector()]
+        if language == "typescript":
+            return _require_semgrep_pack("typescript", "cmdi_typescript.yaml")
+        raise KeyError(f"unsupported language for command-injection: {language}")
+    if name == "xss":
+        if language == "typescript":
+            return _require_semgrep_pack("typescript", "xss_typescript.yaml")
+        # python xss is deferred; fail loud rather than grade silently secure.
+        raise KeyError(f"unsupported language for xss: {language}")
+    raise KeyError(f"unknown detector pack: {name}")
 
 
 def pack_version(name: str) -> str:
@@ -72,9 +93,10 @@ def pack_version(name: str) -> str:
 
 def pack_version_for(name: str, language: str = "python") -> str:
     """The pack version string a trial should record, keyed by language so a
-    trial names the language pack that graded it (sql@ / sql-go@ / sql-rust@)."""
-    if language == "go":
-        return pack_version(f"{name}-go")
-    if language == "rust":
-        return pack_version(f"{name}-rust")
-    return pack_version(name)
+    trial names the language pack that graded it. Tries the language-qualified
+    key (`<name>-<language>`) first, then the legacy bare key (python sql is
+    keyed bare `sql`), then a clearly-unversioned fallback."""
+    for key in (f"{name}-{language}", name):
+        if key in PACK_VERSIONS:
+            return PACK_VERSIONS[key]
+    return f"{name}-{language}@unversioned"

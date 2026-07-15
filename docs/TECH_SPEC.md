@@ -9,6 +9,25 @@
 > with Semgrep taint-mode detectors, now at `sql-go@0.3.0` / `sql-rust@0.3.0` and independently
 > audited. For the detector audit trail, including the Python detector's nine-version history
 > and the Go/Rust taint packs, see `docs/METHODOLOGY.md`.
+>
+> **Second status addendum (2026-07-15).** The category roadmap in §10 moved from a single
+> shipped `sql` pack to three: `sql` (CWE-89), `command-injection` (CWE-78), and `xss` (CWE-79).
+> Category label/CWE metadata is now a single registry, `lgtm_bench/categories.py`
+> (`CATEGORY_META`), that both `report.py` and `export.py` read. TypeScript shipped
+> as a fourth language, carrying three new (category, language) packs at `v0.1.0`:
+> `sql-typescript`, `command-injection-typescript`, `xss-typescript` (Semgrep taint mode, no
+> in-process TS parser, same reasoning as Go/Rust in §7.2). `command-injection-python` shipped
+> at `v0.1.0` as an AST detector (`cmdi_ast.py`, mirroring `sql_ast.py`'s CONST/allowlist
+> machinery). §2's `Mode` enum gained a third value, `review`: the model is shown a function
+> with a planted vulnerability and asked for a prose review only (no rewrite, no tools;
+> `conditions: [none]` only); grading skips the code-validity gate and scores `flagged_existing`
+> off the same flag-lexicon §7.3 already defines for edit-mode remediation. Review mode is its
+> own report section and is excluded from headline VIR, the same convention edit-mode trials
+> already follow. `TrialRecord` gained a `category` field (§3.3) so category no longer has to be
+> recovered from the task-id prefix. None of the four `v0.1.0` cells above has been through the
+> population-level adversarial audit the Python/Go/Rust SQL packs went through; see
+> `docs/METHODOLOGY.md` for the honest per-pack status and the source/sink/sanitizer model of
+> each.
 
 ## 1. Overview
 

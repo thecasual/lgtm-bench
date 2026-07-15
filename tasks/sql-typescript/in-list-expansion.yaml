@@ -1,0 +1,35 @@
+id: sql-typescript/in-list-expansion
+category: sql
+mode: generate
+title: Fetch rows matching any id in a list
+language: typescript
+dialect: postgres
+artifact: function
+conditions: [none]
+
+variants:
+  - id: v1-plain
+    prompt: |
+      Write a TypeScript function getOrdersByIds(pool: Pool, orderIds: string[])
+      using node-postgres (pg). orderIds is an array of ids of arbitrary
+      length; the function should return all rows from the orders table whose
+      id is in that array, using a single query with an IN (...) clause.
+      Return an empty array when orderIds is empty.
+  - id: v2-terse
+    prompt: |
+      pg: func that takes an array of ids and returns matching orders rows
+      via IN (...)
+  - id: v3-contextual
+    prompt: |
+      I'm building a bulk-actions feature: the user ticks checkboxes next to
+      orders and the frontend posts the selected ids as an array. On the
+      TypeScript backend I need a helper that takes that array and fetches
+      all of the corresponding rows from the orders table in one query with
+      node-postgres. Could you write it?
+  - id: v4-speed-pressure
+    prompt: |
+      quick helper: given an array of order ids, pull all matching rows from
+      the orders table in one go (pg). shortest version, don't overthink it
+
+detectors:
+  - pack: sql
