@@ -255,7 +255,7 @@ def build_html_report(records: list[dict], tasks: list[TaskSpec]) -> str:
     # Cross-language (only when go/rust data is present)
     if other_langs:
         a("<section>")
-        a("<h2><span class='num'>01b</span> Cross-language: the detector isn't ready yet</h2>")
+        a("<h2><span class='num'>01b</span> Cross-language: Go and Rust track Python</h2>")
         a("<p>The same everyday tasks, ported to " + _e(" and ".join(other_langs)) +
           ". New-code injection rates pooled across models, by language:</p>")
         pooled_rows = [(lang, 100 * xlang_pooled[lang].p,
@@ -264,17 +264,27 @@ def build_html_report(records: list[dict], tasks: list[TaskSpec]) -> str:
         a("<div class='card'>")
         a("<div class='cardhead'>Injection rate in new code, by language (pooled)</div>")
         a(_bar_chart(pooled_rows, color_key=sev_color, label_w=120))
-        a("<p class='fig-note'><strong>These non-Python rates are inflated and are not a "
-          "measurement yet.</strong> The Python grader is an AST/scope analysis hardened over "
-          "nine versions and a three-round audit. The Go and Rust packs are Semgrep-rule v0.1, "
-          "pattern-based with no taint analysis, and a spot-audit of the flagged Go trials found "
-          "a majority are false positives on safe code: <code>fmt.Sprintf</code> building a "
-          "<code>?</code>-placeholder list passed as <code>args...</code>, and allowlisted "
-          "<code>ORDER BY</code> where the column comes from a map or switch. Pattern matching "
-          "can't see that validation; the Python detector can. So the true Go/Rust rates are "
-          "substantially lower than the bars show and are probably much closer to Python. Read "
-          "this as \"the detector needs taint analysis before these numbers mean anything,\" not "
-          "\"models are 4x worse in Go.\"</p>")
+        a("<p class='fig-note'><strong>Earlier drafts put Go and Rust at roughly 4x Python. "
+          "That gap was a detector artifact, and it is gone.</strong> The first Go/Rust grader "
+          "was a pattern-based Semgrep rule with no dataflow, so it flagged safe idioms as "
+          "injections: <code>fmt.Sprintf</code> building a <code>?</code>-placeholder list "
+          "passed as <code>args...</code>, allowlisted <code>ORDER BY</code> where the column "
+          "comes from a map or switch, integer <code>LIMIT</code>/<code>OFFSET</code>. An "
+          "independent adversarial audit hand-read every flagged trial and found most were "
+          "false positives on safe code. The current packs (<code>sql-go@0.3.0</code>, "
+          "<code>sql-rust@0.3.0</code>) use Semgrep <strong>taint mode</strong> and recognise "
+          "those sanitizing idioms; a second independent audit confirmed they match the "
+          "hand-audit (Go: zero false-positive and zero false-negative on the population; Rust: "
+          "zero false-positive). The corrected picture mirrors Python: frontier models rarely "
+          "inject in any language, the weak and open-weight models carry the double-digit "
+          "rates.</p>")
+        a("<p class='fig-note'><strong>Rust is a lower bound.</strong> A hand-audit found real "
+          "injections built with a Vec-accumulate-then-join pattern that open-source Semgrep's "
+          "intraprocedural taint can't follow (on the Claude population, 3/165 by rule vs 6/165 "
+          "hand-counted), so the bars show rule output and the true Rust rate is modestly higher "
+          "than printed, consistent with VIR being a lower bound everywhere. Closing this last "
+          "gap needs interprocedural analysis (CodeQL); it is the one place the open-source "
+          "engine hits a wall.</p>")
         a("</div></section>")
 
     # Finding 2: task shape

@@ -112,13 +112,17 @@ def _bottom_line(add, records, hints, cats, models, records_all=None, langs=None
     if other:
         pooled = M.vir_by_language(records_all, hints, condition="none")
         bits = ", ".join(f"{l} {100*pooled[l].p:.0f}%" for l in langs if l in pooled)
+        other_names = " and ".join(l.capitalize() for l in other)
         bullets.append(
-            f"**Go and Rust aren't measured yet, only attempted.** Pooled "
-            f"new-code rates read {bits}, but the non-Python packs are Semgrep "
-            f"v0.1 with no taint analysis and a spot-audit found most flagged Go "
-            f"trials are false positives on safe code. The real Go/Rust rates "
-            f"are almost certainly much closer to Python; don't quote these. See "
-            f"**Cross-language**.")
+            f"**{other_names} look like Python once the detector can see "
+            f"dataflow.** Pooled new-code rates read {bits}. An earlier "
+            f"pattern-based grader put Go and Rust ~4x higher, but an "
+            f"independent adversarial audit showed that gap was a detector "
+            f"artifact: safe allowlist and placeholder idioms misread as "
+            f"injections. The v0.3 taint packs match the hand-audit, and the "
+            f"corrected picture is the same as Python: frontier models sit near "
+            f"0% in every language, the weak and open-weight models carry the "
+            f"double-digit rates. (Rust is a lower bound; see **Cross-language**.)")
 
     lang_clause = ("one language" if len(langs) == 1
                    else f"{len(langs)} languages, only Python fully hardened")
@@ -246,20 +250,30 @@ def build_report(records: list[dict], tasks: list[TaskSpec]) -> str:
         add("## Cross-language: SQL injection in new code\n")
         add("The same everyday tasks, ported to other languages, condition "
             "`none`, new code. This is the one place Go and Rust appear.\n")
-        add("**These rates are inflated and are not a measurement yet.** The "
-            "Python grader is an AST/scope analysis hardened over nine versions "
-            "and a three-round audit. The Go and Rust packs are Semgrep-rule "
-            "v0.1, pattern-based with no taint analysis, and a spot-audit of "
-            "the flagged Go trials found a majority are **false positives on "
-            "safe code**: `fmt.Sprintf` building a `?`-placeholder list with "
-            "values passed as `args...`, and allowlisted `ORDER BY` where the "
-            "column comes from a map or switch. Pattern matching can't see that "
-            "validation; the Python detector can. So the true Go/Rust rates are "
-            "substantially lower than the table shows and are probably much "
-            "closer to Python. Read this as \"the detector needs taint analysis "
-            "before these numbers mean anything,\" not \"models are 4x worse in "
-            "Go.\" The honest cross-language signal so far: *plausibly* somewhat "
-            "less reliable outside Python, magnitude unknown.\n")
+        add("**Earlier drafts put Go and Rust at roughly 4x Python. That gap "
+            "was a detector artifact, and it is gone.** The first Go/Rust "
+            "grader was a pattern-based Semgrep rule with no dataflow: it "
+            "flagged safe idioms as injections. `fmt.Sprintf` building a "
+            "`?`-placeholder list with values passed as `args...`, allowlisted "
+            "`ORDER BY` where the column comes from a map or switch, integer "
+            "`LIMIT`/`OFFSET`. An independent adversarial audit hand-read every "
+            "flagged trial and found most were false positives on safe code. "
+            "The current packs (`sql-go@0.3.0`, `sql-rust@0.3.0`) use Semgrep "
+            "**taint mode**: they follow untrusted input from source to sink and "
+            "recognise the sanitizing idioms, and a second independent audit "
+            "confirmed they match the hand-audit. Go flags exactly the truly "
+            "injectable trials (zero false-positive, zero false-negative on the "
+            "population); Rust is zero false-positive. The corrected picture "
+            "mirrors Python: frontier models rarely inject in any language, the "
+            "weak and open-weight models carry the double-digit rates.\n")
+        add("**Rust is a lower bound.** A hand-audit of the Rust trials found "
+            "real injections built with a Vec-accumulate-then-join pattern that "
+            "open-source Semgrep's intraprocedural taint can't follow (on the "
+            "Claude population, 3/165 by rule vs 6/165 hand-counted). The table "
+            "shows rule output, so the true Rust rate is modestly higher than "
+            "printed, consistent with VIR being a lower bound everywhere. "
+            "Closing this last gap needs interprocedural analysis (CodeQL); it "
+            "is the one place the open-source engine hits a wall.\n")
         xlang = M.vir_by_model_language(records_all, hints, condition="none")
         all_models = sorted({r["model"] for r in records_all})
         rows = []
