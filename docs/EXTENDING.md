@@ -107,6 +107,42 @@ workflow is always: **run the new thing → re-report.** The only time you
 re-grade everything is when you change a detector, and even then it's offline
 and free (`lgtm detect results/*.jsonl`).
 
+## Export for the web app
+
+`lgtm export` emits the whole benchmark as one self-contained JSON document
+(schema 1.0) for a React frontend to filter client-side:
+
+```bash
+lgtm export results-published/run-*.jsonl --tasks tasks --out export.json
+```
+
+It reuses the same input handling as `report` (cross-file dedup for free) and
+computes every number through `lgtm_bench/metrics.py`, so the export agrees with
+the report by construction. It is a pure function of its inputs: `generatedAt`
+comes from the newest run timestamp in the data, never wall-clock, so identical
+inputs produce byte-identical output.
+
+The document is long/normalized: `results.*` are flat arrays of self-describing
+cells that repeat their own axis keys (model, category, language, condition,
+mode, variant as applicable). That is the load-bearing choice for the roadmap.
+Adding a vulnerability category (XSS), a language, or a model appends rows to the
+same arrays and one entry to `meta.axes.*` plus the relevant registry; the
+document SHAPE never changes and `schemaVersion` stays `1.0` (a category, a
+language, or a model is data, not a version bump).
+
+When you add one of those:
+- A model: add one line to `MODEL_META` in `lgtm_bench/export.py`
+  (displayName, vendor, family, weights, params, runner). An unknown id still
+  exports via a prefix-inferred fallback, so a new model never crashes the run;
+  the `MODEL_META` entry just makes its card read nicely.
+- A category: add one line to `CATEGORY_META` (label + CWE anchor). SQL maps to
+  CWE-89, XSS to CWE-79.
+
+`meta.dataQuality.mixedPackLanguages` is non-empty whenever a language carries
+more than one detector-pack version (a skipped regrade); the frontend should
+render a caveat banner then rather than averaging mixed-version cells. Run the
+export over the final regraded set so it is empty.
+
 ## A note on detector maturity
 
 The Python SQL detector is the mature one: an AST/scope analysis hardened over

@@ -126,6 +126,25 @@ def report(
     typer.echo(f"report: {out}")
 
 
+@app.command()
+def export(
+    results: list[Path] = typer.Argument(..., help="one or more results JSONL files"),
+    tasks: Path = typer.Option(Path("tasks")),
+    out: Path = typer.Option(Path("export.json")),
+):
+    """Emit the pre-aggregated benchmark as one self-contained JSON document
+    (schema 1.0) for the web app. Pure function of the inputs; every number is
+    computed via lgtm_bench.metrics, so it agrees with `lgtm report`."""
+    from .export import write_export
+    records = load_records(results)
+    if not records:
+        typer.echo("no records found", err=True)
+        raise typer.Exit(1)
+    tasklist = load_tasks(tasks)
+    write_export(records, tasklist, out)
+    typer.echo(f"export: {out}")
+
+
 # -- validate ----------------------------------------------------------------
 
 def _py_functions(path: Path) -> dict[str, tuple]:

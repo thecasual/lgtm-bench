@@ -90,6 +90,7 @@ lgtm report results-published/run-*.jsonl --format html --out docs/poc-report.ht
 lgtm evidence results-published/run-*.jsonl --out docs/poc-evidence.md
 lgtm evidence results-published/run-*.jsonl --verdict vulnerable \
      --out docs/poc-evidence-vulnerable.md
+lgtm export results-published/run-*.jsonl --tasks tasks --out docs/export.json
 ```
 
 The report is a pure function of the JSONL: new models and languages slot
