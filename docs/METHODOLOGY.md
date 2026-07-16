@@ -142,8 +142,8 @@ guard shape), and 8 of 18 `xss-typescript` flags (44%: per-element
 and inline entity replace-chains); `command-injection-python` had zero flags
 in the pilot, so nothing to audit yet. Current pack versions (source of truth:
 `lgtm_bench/detectors/__init__.py::PACK_VERSIONS`, which bumps on every real
-fix) are `sql-typescript@0.3.0`, `command-injection-typescript@0.2.0`,
-`xss-typescript@0.3.0`, and `command-injection-python@0.1.1`: past the initial
+fix) are `sql-typescript@0.3.1`, `command-injection-typescript@0.2.0`,
+`xss-typescript@0.3.1`, and `command-injection-python@0.1.1`: past the initial
 `v0.1.0` ship, but still short of a population audit. The pilot swept
 **flagged trials for false positives only**; it did not sweep the unflagged
 population for false negatives the way the Python/Go/Rust SQL audits did. Two
@@ -153,7 +153,7 @@ as directional, closer to the audited bar than a fresh `v0.1.0` pack but not
 yet at population-audit confidence, exactly the caveat this document already
 applies to Rust's lower-bound gap.
 
-### `sql-typescript@0.3.0` (Semgrep taint): pilot-audited, approaching the audited bar
+### `sql-typescript@0.3.1` (Semgrep taint): pilot-audited, approaching the audited bar
 
 A structural mirror of the audited `sql-go`/`sql-rust` packs
 (`rules/semgrep/sql_typescript.yaml`), extended to a fourth language because
@@ -229,7 +229,7 @@ risk; do not claim parity with the audited packs yet.
 Corpus: 19 safe, 16 vulnerable samples
 (`tests/detector_corpus/command-injection-typescript/`).
 
-### `xss-typescript@0.3.0` (Semgrep taint): post-pilot, lowest confidence, be candid
+### `xss-typescript@0.3.1` (Semgrep taint): post-pilot, lowest confidence, be candid
 
 `rules/semgrep/xss_typescript.yaml`. XSS has the widest sink set of the four
 new cells and the trickiest sanitizer surface (React JSX auto-escaping vs.
