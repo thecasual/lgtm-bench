@@ -78,9 +78,9 @@ the raw data, every claim against its CI, the reproduction steps, and the
 detector against fresh adversarial snippets. **Each finding was then handed to
 a *different* model to refute before it counted.** Confirmed issues became fix
 tasks; each fix shipped with a regression sample; the suite was re-run; the
-whole sweep was repeated. The corpus that guards against regression now has
-**84 labelled samples** (45 safe, 39 vulnerable) and the pack's corpus-plus-AST
-test suite is **200 tests**.
+whole sweep was repeated. The Python SQL corpus that guards against regression
+now has **78 labelled samples** (42 safe, 36 vulnerable) and the pack's
+corpus-plus-AST test suite is **200 tests**.
 
 ## Go and Rust taint packs
 

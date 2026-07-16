@@ -58,12 +58,12 @@ source; every lgtm-bench figure is reproducible from `results-published/` via
 
 Our pooled introduction rate is **15.6% (1 in 6), a strict lower bound**, over
 benign single-function prompts that never mention security, across ten models
-(strong Claude models near 0% pull the pool down; our mid-tier models sit at
-15-25%, on top of everyone else's range).
+(strong Claude models near 0% pull the pool down; the mid-tier Claude models sit
+at 15-22%, and the open-weight models run higher still, up to ~31%).
 
 | Study | Task scope | Grader | Headline insecure rate |
 | --- | --- | --- | --- |
-| lgtm-bench (this repo) | single function, benign prompt | static (lower bound) | 15.6% pooled; 0-24% by model |
+| lgtm-bench (this repo) | single function, benign prompt | static (lower bound) | 15.6% pooled; 0-31% by model |
 | Veracode 2025/2026 | single task, security-relevant | SAST | 45% overall; SQL ~20%, XSS ~86% |
 | SafeGenBench (2506.05692) | scenario snippet | SAST + LLM judge | ~62% |
 | SecureAgentBench (2509.22097) | multi-file repo task | live exploit + tests | 76.2% not both-secure-and-correct |
@@ -103,7 +103,7 @@ Each of the five leaves a gap this benchmark is built to fill.
 
 2. **The within-vendor model lever, isolated.** The prior work compares vendors,
    or model vs no-model. None isolate the spread *inside one vendor's lineup on
-   identical tasks*. We show a 10x gap (`opus-4-8` at 2% vs `sonnet-4-5` at 24% on
+   identical tasks*. We show a 10x gap (`opus-4-8` at 2% vs `sonnet-4-5` at 22% on
    the same Python SQL tasks), which is the single most actionable fact for a user
    whose tool silently picks the model for them.
 

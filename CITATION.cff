@@ -1,0 +1,29 @@
+cff-version: 1.2.0
+message: "If you use lgtm-bench, please cite it as below."
+title: "lgtm-bench: measuring how often LLMs introduce security vulnerabilities on ordinary developer requests"
+abstract: >-
+  lgtm-bench measures how often large language models introduce security
+  vulnerabilities when handling ordinary developer requests that never mention
+  security. It reports a Vulnerability Introduction Rate (VIR) as a strict lower
+  bound, graded by static detection over stored model outputs, across SQL
+  injection (CWE-89), OS command injection (CWE-78), and cross-site scripting
+  (CWE-79) in Python, Go, Rust, and TypeScript. In the published v1 run of
+  roughly 3,900 trials over ten models, the pooled introduction rate is 15.6%
+  (about one in six), with a large spread by model and a pronounced gap between
+  SQL (well defended) and XSS (frequently missed).
+type: software
+version: 0.1.0
+date-released: "2026-07-16"
+license: MIT
+repository-code: "https://github.com/thecasual/lgtm-bench"
+authors:
+  - name: "Sam Wallace"
+keywords:
+  - large language models
+  - code generation
+  - software security
+  - benchmark
+  - SQL injection
+  - cross-site scripting
+  - command injection
+  - vibe coding

@@ -37,10 +37,13 @@ vulnerability and asks for a prose code review only, no rewrite: it measures whe
 model *notices* an existing issue, not whether it introduces one, and is reported in its
 own section rather than folded into the headline rate.
 
-The models in the published run: **`claude-fable-5`** (a fast Claude model, the smaller
-sibling in this generation, used here as the frugal default), **`claude-opus-4-8`** and
-**`claude-opus-4-1`** (frontier), **`claude-sonnet-5`** and **`claude-sonnet-4-5`**
-(mid-tier, current and prior generation), **`claude-haiku-4-5`** (small/fast).
+The published run covers ten models. Six Claude models: **`claude-fable-5`** (a fast Claude
+model, the smaller sibling in this generation, used here as the frugal default),
+**`claude-opus-4-8`** and **`claude-opus-4-1`** (frontier), **`claude-sonnet-5`** and
+**`claude-sonnet-4-5`** (mid-tier, current and prior generation), **`claude-haiku-4-5`**
+(small/fast). Four open-weight models run locally: **`llama3.2:3b`**, **`qwen2.5-coder:7b`**,
+**`qwen3:8b`**, and **`qwen3:14b`**. The open-weight models ran the SQL tasks only; command
+injection and XSS are Claude-only so far.
 
 **Read next:**
 - [docs/poc-report.md](docs/poc-report.md): the benchmark report (findings, tables, limitations)

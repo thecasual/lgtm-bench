@@ -6,6 +6,9 @@ build-backend = "setuptools.build_meta"
 name = "lgtm-bench"
 version = "0.1.0"
 description = "Benchmark for how often LLMs introduce security vulnerabilities in ordinary developer requests"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Sam Wallace" }]
 requires-python = ">=3.11"
 dependencies = [
     "pydantic>=2",
