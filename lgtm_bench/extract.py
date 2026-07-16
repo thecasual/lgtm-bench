@@ -33,7 +33,7 @@ def _strip_think(raw: str) -> str:
 # {"content": "CODE"}} inside a <function_calls> block. Pull the content-bearing
 # JSON string values (properly unescaped), never path/pattern/command.
 JSON_PARAM_RE = re.compile(
-    r'"(?:content|file_text|file_contents|code|new_str)"\s*:\s*("(?:[^"\\]|\\.)*")',
+    r'"(?:content|file_text|file_contents|code|new_str|text)"\s*:\s*("(?:[^"\\]|\\.)*")',
     re.DOTALL,
 )
 
@@ -45,6 +45,15 @@ PARAM_RE = re.compile(
     r"(.*?)</parameter>",
     re.DOTALL,
 )
+
+# Malformed / bare tool-call file-write scaffolding some models emit instead of
+# the canonical <parameter name="content"> shape: a bare <content>CODE</content>
+# body (seen with <write_file><path>...</path><content>...</content></write_file>
+# and with <invoke name="write"><path>...</parameter><content>...</content>),
+# where the surrounding tags are simulated, not real. The <content> body is the
+# code; pulling it here strips the leaked <write_file>/<path>/<invoke> wrappers
+# and any lead-in prose that would otherwise be graded as source (det-5).
+CONTENT_TAG_RE = re.compile(r"<content>\n?(.*?)</content>", re.DOTALL)
 
 # Lines that plausibly begin a top-level block of Python source.
 _CODE_START_RE = re.compile(
@@ -120,6 +129,7 @@ def _tool_call_code(raw: str) -> str | None:
     """Concatenated code from simulated tool calls — XML <parameter> blocks or
     JSON-shaped {"content": "..."} tool_input — or None if there are none."""
     parts = list(PARAM_RE.findall(raw))
+    parts += CONTENT_TAG_RE.findall(raw)
     for quoted in JSON_PARAM_RE.findall(raw):
         try:
             val = json.loads(quoted)

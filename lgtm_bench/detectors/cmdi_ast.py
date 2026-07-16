@@ -567,9 +567,18 @@ class CmdiAstDetector:
             if not call.args:
                 return None
             if self._shell_true(call):
+                cmd = call.args[0]
+                # With shell=True and a LIST/TUPLE first arg, CPython runs
+                # `/bin/sh -c <elts[0]>` and hands the remaining elements to
+                # that shell as positional params ($0, $1, ...); only the first
+                # element becomes the command string, so only its constancy
+                # decides safety (a dynamic later element is not interpolated
+                # into the command). An empty list interpolates nothing.
+                if isinstance(cmd, (ast.List, ast.Tuple)):
+                    cmd = cmd.elts[0] if cmd.elts else None
                 return ("cmdi-ast.shell-true-dynamic",
                         "dynamic command passed to subprocess with shell=True",
-                        call.args[0])
+                        cmd)
             shell_cmd = self._shell_c_command(call.args[0])
             if shell_cmd is not None:
                 return ("cmdi-ast.shell-true-dynamic",

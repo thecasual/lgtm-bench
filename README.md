@@ -23,11 +23,13 @@ pre-registered hypotheses: three vulnerability classes modern models may have ef
 plausibly still *introduce* (insecure randomness for secrets, path traversal, command
 injection).
 
-Three of those six hypotheses now have shipped task suites and detectors: **SQL injection**
-(`sql`, CWE-89), **OS command injection** (`command-injection`, CWE-78), and **cross-site
-scripting** (`xss`, CWE-79). Detection is fully static (Semgrep taint-mode rules plus, for
-Python, an AST detector): deterministic and free to run. Model calls ride an Anthropic
-subscription via Claude Code headless mode.
+Two of those six hypotheses now have shipped task suites and detectors: **SQL injection**
+(`sql`, CWE-89, hypothesis H-W1) and **OS command injection** (`command-injection`, CWE-78,
+hypothesis H-L3). A third category, **cross-site scripting** (`xss`, CWE-79), also has a
+shipped task suite and detector; it was added after pre-registration and is not one of the
+original six hypotheses, so read it as an extra category, not a hypothesis test. Detection is
+fully static (Semgrep taint-mode rules plus, for Python, an AST detector): deterministic and
+free to run. Model calls ride an Anthropic subscription via Claude Code headless mode.
 
 Alongside the `generate` (write new code) and `edit` (modify existing code) task modes, a
 third mode, **review**, shows the model a function that already contains a planted
@@ -55,6 +57,11 @@ pip install -e .            # python 3.11+
 lgtm validate               # check tasks + fixture pair integrity
 python -m pytest tests/ -q  # detector corpus must pass 100%
 ```
+
+The full test suite is semgrep-backed for several corpora; on the first run, or on a machine
+without a warm semgrep cache, budget several minutes for `pytest tests/ -q` rather than
+expecting it to return instantly (see `docs/RUNBOOK.md` for the per-record planning number
+that governs the slowest step, offline detector regrading).
 
 The default runner shells out to **Claude Code headless** (`claude -p`), so model calls ride
 your existing Claude subscription: install and log in to the `claude` CLI first. No API key
@@ -99,17 +106,20 @@ can't work inside a repo). Beyond Python, there are Go, Rust, and TypeScript SQL
 taint-mode packs (`sql-go@0.3.0`, `sql-rust@0.3.0`), validated against a labeled corpus and a
 two-round adversarial audit that matched a hand-count of the trial population (Go zero
 false-positive and zero false-negative; Rust zero false-positive, reported as a lower bound
-because one Vec-join dataflow shape sits below open-source Semgrep).
+because two dataflow shapes, a `Vec`-accumulate-then-join and a
+`.keys().map().collect().join()` chain, sit below open-source Semgrep, giving three
+documented false negatives).
 [docs/poc-report.md](docs/poc-report.md) has the numbers.
 
 Command injection and XSS ship as TypeScript Semgrep taint packs
 (`--task-filter cmdi-typescript` / `xss-typescript`), plus command injection ships a Python
-AST detector mirroring the SQL one (`--task-filter cmdi-python`). All four of these cells are
-`v0.1.0`: their corpus regression gate passes 100%, but none has yet been through the same
-population-level adversarial audit as Python/Go/Rust SQL, so treat their numbers as
-directional, especially `xss-typescript` (the widest sink set and trickiest sanitizer
-surface of the four). See [docs/METHODOLOGY.md](docs/METHODOLOGY.md) for each pack's exact
-model and honesty caveat.
+AST detector mirroring the SQL one (`--task-filter cmdi-python`). These four (category,
+language) cells (current versions in
+`lgtm_bench/detectors/__init__.py::PACK_VERSIONS`) have each been through a pilot audit of
+their flagged Claude trials, narrower in scope than the population-level adversarial audit
+Python/Go/Rust SQL received, so treat their numbers as directional, especially
+`xss-typescript` (the widest sink set and trickiest sanitizer surface of the four). See
+[docs/METHODOLOGY.md](docs/METHODOLOGY.md) for each pack's exact model and honesty caveat.
 
 There is also a **review mode** (`--task-filter review-sql`): the model is shown a function
 with a planted vulnerability and asked for a prose review, no rewrite; the flag rate is a
@@ -152,8 +162,11 @@ ground truth is under `results-published/`.
 Harness implemented through M1-M4 plus the M5 edit-task/remediation slice, and now a slice of
 the M5 category roadmap. Python SQL is the mature vertical; Go/Rust SQL packs (v0.3, Semgrep
 taint mode, audited) and an Ollama runner for open-weight models are in. Three categories now
-have shipped detectors (SQL/CWE-89, command injection/CWE-78, XSS/CWE-79); the four newest
-(category, language) cells are `v0.1.0` taint/AST packs pending a population audit, and review
-mode (does the model flag a planted vulnerability in prose?) is in as a third interaction mode
-alongside generate/edit. Milestones and remaining scope (the other three category-roadmap
-hypotheses, new languages, interprocedural Rust dataflow via CodeQL) are in the spec.
+have shipped detectors (SQL/CWE-89, command injection/CWE-78, XSS/CWE-79); of those, only SQL
+and command injection are pre-registered hypotheses (H-W1, H-L3) -- XSS is an added category,
+not one of the six. The four newest (category, language) cells are pilot-audited taint/AST
+packs pending the same population-level audit Python/Go/Rust SQL received (current versions in
+`lgtm_bench/detectors/__init__.py::PACK_VERSIONS`), and review mode (does the model flag a
+planted vulnerability in prose?) is in as a third interaction mode alongside generate/edit.
+Milestones and remaining scope (the other four pre-registered category-roadmap hypotheses,
+new languages, interprocedural Rust dataflow via CodeQL) are in the spec.

@@ -18,6 +18,10 @@ python -m pytest tests/ -q   # the detector corpus must pass 100%
 The raw per-trial results live in `results-published/`. To rebuild the exact
 report and evidence files from them:
 
+Budget real time for this step: it regrades every stored record through semgrep, and
+`docs/RUNBOOK.md` step 2's planning number (roughly 1.3-1.5s per record) is the single source
+of truth for how long a given file will take.
+
 ```bash
 # Re-grade the stored model outputs under the current detector (free, offline)
 for f in results-published/run-*.jsonl; do

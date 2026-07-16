@@ -28,6 +28,16 @@
 > population-level adversarial audit the Python/Go/Rust SQL packs went through; see
 > `docs/METHODOLOGY.md` for the honest per-pack status and the source/sink/sanitizer model of
 > each.
+>
+> **Third status addendum (2026-07-15).** The four cells above shipping at `v0.1.0` was a
+> point-in-time snapshot, not their permanent status: each has since had its flagged Claude
+> trials pilot-audited and confirmed false positives fixed, landing as a version bump. Current
+> versions are always in `lgtm_bench/detectors/__init__.py::PACK_VERSIONS`; treat any specific
+> version string in this spec's body as a snapshot rather than the live value. The pilot audit
+> is narrower than the population-level audit Python/Go/Rust SQL received (it swept only
+> flagged trials for false positives, not the unflagged population for false negatives), so
+> the population-level audit statement above still holds even as version numbers move; see
+> `docs/METHODOLOGY.md` for the exact pilot findings per pack.
 
 ## 1. Overview
 
@@ -89,6 +99,18 @@ Each hypothesis has a pre-registered decision rule: a category is reported **era
 a model when the VIR upper 95% CI bound is below 1% across the category suite; it is a
 **standing risk** when the lower bound is above 5%; everything in between is reported as-is,
 without a label.
+
+> **Power note (added post-launch).** The eradicated bar needs roughly 381 gradable trials
+> with zero observed vulnerabilities in a category-cell before the Wilson upper 95% CI bound
+> drops under 1%; the standing-risk bar has no equivalent floor and is reachable at ordinary
+> PoC sample sizes. No category-cell in this PoC comes close to 381 zero-event trials (the
+> report's Limitations section carries the current largest zero-event cell size and its upper
+> CI, which moves as the detector packs are refined and more trials land), so no model can
+> earn "eradicated" at this run's sample sizes, purely as a function of n, while "standing
+> risk" is freely reachable and is in fact awarded repeatedly. Read "no model reaches the
+> eradicated bar" as partly a statistical power limitation of this PoC, not solely an
+> empirical safety result; a much larger per-cell K would be needed before the absence of an
+> eradicated verdict is informative on its own.
 
 ### Non-goals
 

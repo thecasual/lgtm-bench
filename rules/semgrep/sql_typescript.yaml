@@ -8,8 +8,13 @@ rules:
   #            and arrow-function forms; these benchmark samples are single
   #            functions, so a typed parameter is the entry point for
   #            caller-controlled data), the common Express getters
-  #            (req.params.<k>, req.query.<k>, req.body.<k>), and a
-  #            destructured `const { x } = req.query` / `req.body` binding.
+  #            (req.params.<k>, req.query.<k>, req.body.<k>), a
+  #            destructured `const { x } = req.query` / `req.body` binding, and
+  #            the KEYS of a caller-controlled object/map that get interpolated
+  #            as SQL identifiers - `Object.keys(...)` and the for-of / for-in /
+  #            .map key variable over such an object (the column/table-name
+  #            identifier-injection shape, mirroring the go/rust map-key
+  #            sources). See the inline note at those source patterns below.
   #
   # SINKS    - the query-STRING argument (only, via focus-metavariable) of
   #            the common Node SQL driver call shapes: pg pool.query/
@@ -115,6 +120,41 @@ rules:
               - pattern-inside: |
                   export function $F(..., $PARAM: string[], ...) { ... }
           - pattern: $PARAM
+      # Identifier-injection sources: the KEYS of a caller-controlled
+      # object/map (a `Record<...>` parameter or a decoded JSON/form payload)
+      # that get interpolated as SQL IDENTIFIERS (column/table names), mirroring
+      # the go/rust map-key sources (sql_go.yaml `for $KEY := range $PARAM`).
+      # These field-map tasks (insert-from-form, update-profile-fields,
+      # dynamic-filter-where) hand the model a `Record<string,string>` and the
+      # intended vuln is interpolating the user-controlled KEYS as identifiers,
+      # which the value-oriented sources above never see. `Object.keys(...)` is
+      # tainted as a whole (the `columns.join(', ')` shape), and the loop /
+      # callback key variable is focused for the for-of / for-in / .map shapes.
+      # The allow-map lookup / includes / Set.has sanitizers below clear a key
+      # that is constrained to a fixed literal set before it reaches the query.
+      # KNOWN LIMITATION (documented, like the go/rust accumulate FNs): a key
+      # iterated through a variable-indirected `.map` (`const keys =
+      # Object.keys(o); keys.map((k,i) => `${k} = $n`)`) and a bare
+      # `for (const k in o)` accumulation sit below open-source Semgrep's
+      # intraprocedural taint here, so those two shapes are lower-bound
+      # false negatives; the direct `Object.keys(o).map(...)`,
+      # `Object.keys(o).join(...)` and `for (const k of Object.keys(o))` +
+      # push/join shapes are covered.
+      - pattern: Object.keys(...)
+      - patterns:
+          - pattern: |
+              for (const $K of Object.keys($OBJ)) { ... }
+          - focus-metavariable: $K
+      - patterns:
+          - pattern: |
+              for (const $K in $OBJ) { ... }
+          - focus-metavariable: $K
+      - patterns:
+          - pattern: Object.keys($OBJ).map(($K, $I) => $BODY)
+          - focus-metavariable: $K
+      - patterns:
+          - pattern: Object.keys($OBJ).map(($K) => $BODY)
+          - focus-metavariable: $K
       - pattern: $REQ.params.$K
       - pattern: $REQ.query.$K
       - pattern: $REQ.body.$K
@@ -280,3 +320,11 @@ rules:
       - pattern: $ARR.join(...)
         from: $ARR
         to: $ARR.join(...)
+      # `$ARR.push($X)` accumulation: a tainted identifier fragment pushed into
+      # an array that is later join()ed into the query text is as dangerous as
+      # a single concatenated value. This is the identifier-list-built-in-a-loop
+      # shape (`for (const k of Object.keys(fields)) { parts.push(`${k} = ?`) }`
+      # then `parts.join(', ')`), the TS mirror of the go/rust map-key loop.
+      - pattern: $ARR.push($X)
+        from: $X
+        to: $ARR

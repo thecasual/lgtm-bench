@@ -37,11 +37,11 @@ so it stays stable across regrades of the same run.
 
 ## Files in this snapshot
 
-Five runs, 1280 trials total, all regraded under the current detector packs
-(`sql@0.9.0` for Python, `sql-go@0.3.0` and `sql-rust@0.3.0` for Go/Rust) as of
-this session. Every file below is `mode: generate` except
-`run-cdfef7c4b0a3.regraded.jsonl`, which also carries the `mode: edit`
-remediation trials.
+Eight runs, 3938 trials total, all regraded under the current detector packs (see
+`lgtm_bench/detectors/__init__.py::PACK_VERSIONS` for the exact per-(category, language)
+version strings). Every file below is `mode: generate` except
+`run-cdfef7c4b0a3.regraded.jsonl` (also carries `mode: edit` remediation trials) and
+`run-8e3746cbfc1a.regraded.jsonl` (also carries `mode: review` trials).
 
 | File | Run id(s) | Models | Language(s) / condition | Trials |
 |---|---|---|---|---|
@@ -50,11 +50,14 @@ remediation trials.
 | `run-e8a4541a372d.regraded.jsonl` | `2026-07-14T15-26-28Z` | llama3.2:3b, qwen3:8b | Python SQL, `condition: none` (Ollama runner) | 200 |
 | `run-0b9839185649.regraded.jsonl` | `2026-07-14T15-38-02Z` | claude-fable-5, claude-opus-4-8, claude-opus-4-1, claude-sonnet-5, claude-sonnet-4-5, claude-haiku-4-5 | Go + Rust SQL, `condition: none` | 384 |
 | `run-b2c3d1212dc2.regraded.jsonl` | `2026-07-14T20-11-57Z` | llama3.2:3b, qwen3:8b | Go + Rust SQL, `condition: none` (Ollama runner) | 256 |
+| `run-331ab1e81231.regraded.jsonl` | `2026-07-15T02-19-07Z` | qwen2.5-coder:7b | Python + Go + Rust SQL, `condition: none` (Ollama runner) | 912 |
+| `run-3cb9e32d6a5d.regraded.jsonl` | `2026-07-15T02-09-30Z`, `2026-07-15T04-05-04Z` | qwen3:14b | Python + Go + Rust SQL, `condition: none` (Ollama runner) | 912 |
+| `run-8e3746cbfc1a.regraded.jsonl` | `2026-07-15T16-39-29Z`, `2026-07-15T19-00-05Z` | claude-fable-5, claude-opus-4-8, claude-opus-4-1, claude-sonnet-5, claude-sonnet-4-5, claude-haiku-4-5 | Python + TypeScript: command injection, XSS, and TypeScript SQL, `condition: none` (`generate` and `review` modes) | 834 |
 
-That's 8 distinct models across the snapshot (6 Claude, 2 open-weight), matching the
-`docs/poc-report.md` totals. Run the provenance snippet above at any time to confirm these
-numbers against whatever is actually on disk, since this table is a point-in-time summary
-and the directory listing is the source of truth.
+That's 10 distinct models across the snapshot (6 Claude, 4 open-weight: `llama3.2:3b`,
+`qwen2.5-coder:7b`, `qwen3:8b`, `qwen3:14b`). Run the provenance snippet above at any time to
+confirm these numbers against whatever is actually on disk, since this table is a
+point-in-time summary and the directory listing is the source of truth.
 
 ## Read it as prose instead
 

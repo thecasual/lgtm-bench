@@ -282,8 +282,9 @@ def _multi_category() -> list[dict]:
 def test_category_verdicts_table_has_cwe_column():
     recs = _multi_category()
     md = build_report(recs, [])
-    # the category-verdicts table now carries a CWE header and the CWE anchors
-    assert "| Category | CWE |" in md
+    # the category-verdicts table carries Category, Language, CWE and a pooled
+    # VIR column, then per-model verdict columns (claims-2 / num-4).
+    assert "| Category | Language | CWE | VIR (pooled) |" in md
     assert "CWE-89" in md and "CWE-78" in md and "CWE-79" in md
 
 
@@ -300,6 +301,57 @@ def test_hypothesis_count_is_data_derived():
 def test_no_dashes_with_multi_category():
     md = build_report(_multi_category(), [])
     assert EN_DASH not in md and EM_DASH not in md
+
+
+def _cross_language_xss() -> list[dict]:
+    """Python SQL (the analytical body) plus a typescript XSS block that ships
+    ONLY outside python, so a python-only category-verdicts table would drop it.
+    The two Claude models each inject XSS, so the cell is a real standing risk."""
+    out = _python_only()
+    for m in ["claude-opus-4-8", "claude-haiku-4-5"]:
+        for i in range(8):
+            out.append(rec(model=m, task_id="xss-typescript/reflected",
+                           language="typescript", category="xss",
+                           detector_pack_version="xss-typescript@0.2.0",
+                           variant_id=f"vx{i}", trial_index=i,
+                           verdict="vulnerable" if i < 3 else "secure"))
+    return out
+
+
+def test_category_verdicts_cover_all_categories_and_languages():
+    # claims-2: a category that ships only in typescript (xss) must still get a
+    # per-language verdict row, even though the Python analytical body drops it.
+    md = build_report(_cross_language_xss(), [])
+    section = md.split("## Category verdicts")[1].split("## ")[0]
+    # the xss/typescript row is present with its CWE anchor and a pooled VIR
+    assert "`xss`" in section and "`typescript`" in section
+    assert "CWE-79" in section
+    # and it reads as a standing risk for the two Claude models (num-4: the
+    # pooled VIR number is surfaced too)
+    assert "standing risk" in section
+    # the pooled-VIR column header exists so xss surfaces as an explicit number
+    assert "VIR (pooled)" in section
+
+
+def test_eradicated_power_caveat_is_present():
+    # meth-1: the report must disclose that 'eradicated' is not reachable at
+    # this n (its absence is a power limit), stated from the data.
+    md = build_report(_cross_language_xss(), [])
+    assert "zero-event trials" in md
+    assert "not symmetric" in md.lower() or "power limit" in md.lower()
+
+
+# -- (i) python-only scope labels (num-2) -------------------------------------
+
+def test_python_only_scope_labels_present():
+    md = build_report(_mixed_language(), [])
+    # the Headline table title, the per-task table title, and the Bottom-line
+    # SQL sentence all carry an explicit Python-only scope (num-2), so a reader
+    # of the 4-language header does not take them as spanning all languages.
+    assert "## Headline: SQL VIR by model × condition (Python only)" in md
+    assert "## Per-task VIR (condition `none`, Python only)" in md
+    bl = md.split("## Bottom line")[1].split("## ")[0]
+    assert "(Python only)" in bl
 
 
 # -- (g) review mode section --------------------------------------------------

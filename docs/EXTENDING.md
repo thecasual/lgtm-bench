@@ -101,7 +101,8 @@ lgtm report results/*.jsonl --tasks tasks --out report.md
 
 ### TypeScript, specifically
 
-TypeScript shipped as the fourth language (`sql-typescript@0.1.0`), and it is
+TypeScript shipped as the fourth language (`sql-typescript`, current version
+in `lgtm_bench/detectors/__init__.py::PACK_VERSIONS`), and it is
 the reference example for "no in-process parser" languages: like Go and Rust,
 lgtm-bench never parses TypeScript itself, so Semgrep taint mode is not a
 convenience here, it is the only option. Three small additions made TypeScript
@@ -274,14 +275,18 @@ Vec-accumulate-then-join shape that open-source Semgrep's intraprocedural taint
 can't follow, the one case that would need CodeQL). The corpus for each language
 is the regression gate; grow it as you find shapes the rules miss.
 
-Four new cells shipped at `v0.1.0` and have not yet been through that kind of
-adversarial population audit: `sql-typescript`, `command-injection-python`,
-`command-injection-typescript`, and `xss-typescript`. `sql-typescript` and
-`command-injection-python` are structurally close to the audited packs
-(taint mirrors go/rust, the AST detector mirrors `sql_ast.py`'s proven
-CONST/allowlist machinery), so both are expected to converge quickly once
-audited. `command-injection-typescript` and especially `xss-typescript` are
-newer, less-proven surfaces (the shell-vs-argv split, and the JSX-autoescape/
-DOMPurify/textContent sanitizer surface, respectively) and should not be cited
-as audited numbers yet. See `docs/METHODOLOGY.md` for each pack's exact
-source/sink/sanitizer model and honest status.
+Four new cells shipped at `v0.1.0` and have since been through a narrower
+**pilot** audit (their flagged Claude trials only, not a population sweep for
+false negatives): `sql-typescript`, `command-injection-python`,
+`command-injection-typescript`, and `xss-typescript`. None has yet been
+through the same population-level adversarial audit Go/Rust/Python SQL
+received. `sql-typescript` and `command-injection-python` are structurally
+close to the audited packs (taint mirrors go/rust, the AST detector mirrors
+`sql_ast.py`'s proven CONST/allowlist machinery), so both are expected to
+converge quickly once audited. `command-injection-typescript` and especially
+`xss-typescript` are newer, less-proven surfaces (the shell-vs-argv split, and
+the JSX-autoescape/DOMPurify/textContent sanitizer surface, respectively) and
+should not be cited as audited numbers yet. Current versions live in
+`lgtm_bench/detectors/__init__.py::PACK_VERSIONS`; see `docs/METHODOLOGY.md`
+for each pack's exact source/sink/sanitizer model, pilot-audit findings, and
+honest status.

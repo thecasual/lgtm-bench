@@ -34,6 +34,50 @@ def semgrep_available() -> bool:
 _LANG_EXT = {"python": ".py", "go": ".go", "rust": ".rs", "typescript": ".ts"}
 
 
+class SemgrepScanError(RuntimeError):
+    """Raised when semgrep could not actually analyze the target file, so a
+    zero-finding result cannot be trusted as SECURE.
+
+    Three failure shapes are surfaced this way instead of being swallowed into
+    an empty (== SECURE) result: a subprocess timeout, unusable JSON output,
+    and a scan that produced NO findings while semgrep reported a parse/syntax
+    error on the target (the file was only partially parsed, so the missing
+    findings may be false negatives). grading.py maps this to verdict INVALID
+    for the semgrep-only languages (go/rust/typescript), which have no AST
+    backstop, so a failed scan cannot masquerade as a graded-secure trial and
+    is excluded from VIR denominators rather than counted as a clean pass.
+
+    A scan that DID produce findings is authoritative even amid a partial
+    parse elsewhere in the file, so this is never raised when results exist.
+    """
+
+
+def _has_target_parse_error(data: dict, target_name: str) -> bool:
+    """True if semgrep reported a parse/syntax error on the scanned file.
+
+    Semgrep emits these as `errors[].type == ["PartialParsing", ...]` (or a
+    "Syntax error"/"Lexical error" message) with `path`/`spans` pointing at the
+    target. We only trust an empty result set when NO such error was raised."""
+    for err in data.get("errors", []) or []:
+        etype = err.get("type")
+        type_tag = etype[0] if isinstance(etype, list) and etype else etype
+        message = err.get("message", "") or ""
+        is_parse = (
+            type_tag in ("PartialParsing", "SyntaxError", "LexicalError")
+            or "syntax error" in message.lower()
+            or "lexical error" in message.lower()
+        )
+        if not is_parse:
+            continue
+        # Scope to the file we scanned (path field, or any span's file).
+        paths = {err.get("path")}
+        for span in err.get("spans", []) or []:
+            paths.add(span.get("file"))
+        if any(p and p.endswith(target_name) for p in paths) or None in paths:
+            return True
+    return False
+
+
 class SemgrepDetector:
     name = "semgrep"
 
@@ -50,8 +94,9 @@ class SemgrepDetector:
         if binary is None:
             return []
         ext = _LANG_EXT.get(self.language, ".py")
+        target_name = f"snippet{ext}"
         with tempfile.TemporaryDirectory(prefix="lgtm-semgrep-") as td:
-            target = Path(td) / f"snippet{ext}"
+            target = Path(td) / target_name
             target.write_text(code)
             try:
                 proc = subprocess.run(
@@ -60,9 +105,33 @@ class SemgrepDetector:
                      str(target)],
                     capture_output=True, text=True, timeout=120,
                 )
+            except subprocess.TimeoutExpired as e:
+                # A timeout analyzed nothing; letting it become 0 results ==
+                # SECURE would hide a possibly-vulnerable file. Surface it.
+                raise SemgrepScanError(
+                    f"semgrep timed out scanning a {self.language} snippet"
+                ) from e
+            try:
                 data = json.loads(proc.stdout or "{}")
-            except (subprocess.TimeoutExpired, json.JSONDecodeError):
-                return []
+            except json.JSONDecodeError as e:
+                raise SemgrepScanError(
+                    f"semgrep produced unparseable JSON for a {self.language} "
+                    f"snippet (returncode {proc.returncode})"
+                ) from e
+        results = data.get("results", [])
+        # A file semgrep could not fully parse yields zero results, which is
+        # indistinguishable from a genuinely-clean scan. When there are no
+        # findings AND a parse/syntax error was reported on the target, the
+        # zero is untrustworthy -> raise so grading marks the trial INVALID
+        # rather than SECURE (det-2, det-3, pipe-4). A scan that DID find
+        # something is authoritative even amid a partial parse, so we only
+        # guard the empty case.
+        if not results and _has_target_parse_error(data, target_name):
+            raise SemgrepScanError(
+                f"semgrep could not fully parse a {self.language} snippet "
+                f"(partial parse, zero findings); result is not a trustworthy "
+                f"SECURE and is marked invalid instead"
+            )
         # Split once per scan; every finding slices from the same line list.
         # We do NOT trust extra.lines: OSS unauthenticated semgrep 1.169.0
         # emits the literal string "requires login" there instead of the
@@ -70,7 +139,7 @@ class SemgrepDetector:
         # code we already sent it.
         code_lines = code.splitlines()
         findings = []
-        for r in data.get("results", []):
+        for r in results:
             findings.append(Finding(
                 detector=self.name,
                 rule_id=r.get("check_id", "semgrep.unknown"),

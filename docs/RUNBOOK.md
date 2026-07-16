@@ -103,10 +103,20 @@ banner appears, go back to step 2.
 ```bash
 python -m pytest tests/ -q -o addopts=""      # includes the detector corpus
 python3 - <<'EOF'
-for f in ['docs/poc-report.md','docs/poc-report.html']:
+import glob
+# Every AUTHORED shipped doc must be free of em dashes (U+2014) and en dashes
+# (U+2013). docs/poc-evidence.md and docs/poc-evidence-vulnerable.md are
+# excluded on purpose: they quote model raw_output verbatim, including
+# whatever punctuation the model used, and editing a quote to strip a dash
+# would misrepresent what the model actually said. See the "How to audit it
+# yourself" section of docs/METHODOLOGY.md for the exemption's exact scope.
+files = ['README.md', 'results-published/README.md']
+files += sorted(glob.glob('docs/*.md')) + sorted(glob.glob('docs/*.html'))
+files = [f for f in files if 'poc-evidence' not in f]
+for f in files:
     t = open(f, encoding='utf-8').read()
     assert t.count(chr(0x2014)) == 0 and t.count(chr(0x2013)) == 0, f
-print('dash check clean')
+print('dash check clean:', len(files), 'files')
 EOF
 git add -A && git commit -m "Fold <model> run into published report" && git push
 ```

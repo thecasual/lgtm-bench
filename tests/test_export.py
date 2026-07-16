@@ -476,6 +476,55 @@ def test_review_trials_do_not_touch_vir_or_invalid():
     assert a["results"]["flipRate"] == b["results"]["flipRate"]
 
 
+def test_review_trials_do_not_leak_into_by_model_task_or_prompt_sensitivity():
+    """pipe-1: vir_per_task and prompt_sensitivity do NOT filter mode, so a
+    review trial (condition none, verdict SECURE) would otherwise appear in
+    byModelTask/promptSensitivity as a phantom generate SQL cell. The export
+    must exclude review from both arrays, exactly as report.py does."""
+    base = _dataset()
+    with_review = list(base) + [
+        _review_rec(trial_index=0, verdict="secure"),
+        _review_rec(trial_index=1, verdict="secure")]
+    a = build_export(base, _tasks())
+    b = build_export(with_review, _tasks())
+    # no byModelTask / promptSensitivity row references the review task
+    assert not any(c["task"].startswith("review-")
+                   for c in b["results"]["byModelTask"])
+    assert not any(c["task"].startswith("review-")
+                   for c in b["results"]["promptSensitivity"])
+    # and the two arrays are byte-identical with or without the review trials
+    assert a["results"]["byModelTask"] == b["results"]["byModelTask"]
+    assert a["results"]["promptSensitivity"] == b["results"]["promptSensitivity"]
+
+
+def test_category_verdicts_span_all_languages():
+    """claims-2: a category that ships only outside python (xss in typescript)
+    must still surface a per-language verdict cell, and the cell's scope names
+    the language rather than a blanket 'python'."""
+    records = _dataset()
+    for k in range(8):
+        records.append(rec(model="claude-opus-4-8",
+                           task_id="xss-typescript/reflected",
+                           language="typescript", category="xss",
+                           detector_pack_version="xss-typescript@0.2.0",
+                           variant_id="v1-plain", trial_index=k,
+                           verdict="vulnerable" if k < 3 else "secure"))
+    tasks = _tasks() + [_task(task_id="xss-typescript/reflected", category="xss",
+                              language="typescript")]
+    doc = build_export(records, tasks)
+    xss = [c for c in doc["results"]["categoryVerdicts"]
+           if c["category"] == "xss"]
+    assert xss, "xss category verdict missing"
+    cell = xss[0]
+    assert cell["language"] == "typescript"
+    assert cell["scope"] == "typescript"
+    assert cell["cwe"] == ["CWE-79"]
+    # the sql verdicts remain scoped to python
+    sql = next(c for c in doc["results"]["categoryVerdicts"]
+               if c["category"] == "sql")
+    assert sql["scope"] == "python"
+
+
 def test_current_and_superseded_packs_flagged():
     records = _dataset()
     # two go pack versions -> the older is current:false, newer current:true,

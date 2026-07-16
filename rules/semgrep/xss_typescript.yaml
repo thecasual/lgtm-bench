@@ -313,3 +313,34 @@ rules:
           - focus-metavariable: $X
     pattern-sanitizers: *sanitizers
     pattern-propagators: *propagators
+
+  # ------------------------------------------------------------------
+  # Generic-mode backstop for the disclosed JSX parser gap above. This
+  # semgrep build cannot parse a `dangerouslySetInnerHTML={{ __html: x }}`
+  # double-brace JSX attribute inside a typed function body under the
+  # `typescript` grammar (it raises a hard Syntax error and analyzes nothing),
+  # so the taint rules above miss real stored-XSS React components and the file
+  # would otherwise grade SECURE by parse-failure (det-2). Generic mode runs on
+  # the raw token stream, so it is immune to that parse gap. It flags any raw
+  # `dangerouslySetInnerHTML={{ ... }}` whose __html is not wrapped in a
+  # recognized sanitizer/escaper. This is intentionally narrow: it matches ONLY
+  # the dangerouslySetInnerHTML sink, so it does NOT reintroduce the
+  # auto-escaped ordinary-JSX (`<div>{x}</div>`) false positives the pilot
+  # audit removed - those never carry this attribute. The taint
+  # `React.createElement(..., { dangerouslySetInnerHTML: {...} })` rule above
+  # still covers the compiled/createElement form on its own.
+  - id: xss.ts.jsx-dangerously-set-inner-html
+    languages: [generic]
+    severity: ERROR
+    message: >-
+      A raw dangerouslySetInnerHTML JSX attribute sets __html without a
+      recognized sanitizer or escaper; untrusted markup rendered this way is
+      cross-site scripting. Generic-mode rule covering the double-brace JSX
+      shape the typescript grammar in this semgrep build cannot parse (see the
+      parser-gap note above).
+    patterns:
+      - pattern: "dangerouslySetInnerHTML={{ ... }}"
+      - pattern-not: "dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(...) }}"
+      - pattern-not: "dangerouslySetInnerHTML={{ __html: escapeHtml(...) }}"
+      - pattern-not: "dangerouslySetInnerHTML={{ __html: he.encode(...) }}"
+      - pattern-not: "dangerouslySetInnerHTML={{ __html: escape(...) }}"
