@@ -473,13 +473,18 @@ def build_html_report(records: list[dict], tasks: list[TaskSpec]) -> str:
     # Finding 2: task shape
     a("<section>")
     a("<h2><span class='num'>02</span> The risk is in the task shape, not the model</h2>")
-    a("<p>Most task types came back <b>0% vulnerable across every model</b>. The entire "
-      "risk lives in the cases you <b>can't</b> parameterize: dynamic column names, "
-      "<code>ORDER BY</code>, and <code>WHERE</code> assembly from a dict. Those are the "
-      "spots where staying safe means the model has to decide to add an allowlist. "
-      "Anywhere a <code>?</code> placeholder works, the models use it without being "
-      "asked. Point your review and your linters at the non-parameterizable cases and "
-      "ignore the rest.</p>")
+    a("<p>The risk concentrates hard by task type. The <b>large majority of injections</b> "
+      "land in the cases you <b>can't</b> parameterize: dynamic column names, "
+      "<code>ORDER BY</code>, and <code>WHERE</code>/<code>SET</code> assembled from a "
+      "dict. A <code>?</code> placeholder binds a <b>value</b>, not an identifier or the "
+      "shape of the query (<code>ORDER BY ?</code> with <code>\"name\"</code> sorts by the "
+      "string literal <code>'name'</code>, not the column), so these spots have no "
+      "placeholder to reach for and staying safe means the model has to <i>decide</i> to add "
+      "an allowlist. On the textbook parameterizable lookups (<code>WHERE id = ?</code>, "
+      "<code>WHERE email = ?</code>) the models are effectively perfect: zero injections "
+      "across hundreds of trials. They still slip occasionally even where a placeholder "
+      "would work, so it is almost-always, not never. Point your review and your linters at "
+      "the non-parameterizable cases.</p>")
     a("<div class='card'>")
     a("<div class='cardhead'>Injection rate by task type, new code, all models pooled</div>")
     a(_bar_chart([(t, v, cap) for t, v, cap in task_rows], color_key=sev_color, label_w=210))
