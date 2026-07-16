@@ -48,6 +48,8 @@ sibling in this generation, used here as the frugal default), **`claude-opus-4-8
 - [docs/REPRODUCE.md](docs/REPRODUCE.md): reproduce the report from scratch, plus a glossary
 - [docs/TECH_SPEC.md](docs/TECH_SPEC.md): the full design
 - [docs/poc-evidence.md](docs/poc-evidence.md): every trial: prompt → output → findings → verdict
+- [docs/related-work.md](docs/related-work.md): five recent studies, how our numbers compare, and what this extends
+- [docs/examples.md](docs/examples.md): worked before/after examples (prompt-tweak flips, the context lever)
 
 ## Quick start
 

@@ -423,3 +423,18 @@ of the generate/edit introduction measurements; it is reported separately and
 never folded into VIR. Results measure the model **plus** the Claude Code
 system prompt and product-default sampling, not a bare model API. See the
 **Limitations** section of `docs/poc-report.md` before citing any figure.
+
+## How this compares to other work
+
+`docs/related-work.md` places these numbers against five studies from roughly
+the last year (Veracode's 2025/2026 GenAI reports, SafeGenBench, SecureAgentBench,
+SUSVIBES, and a qualitative vibe-coding field study). Short version: our pooled
+15.6% lower bound sits at the conservative end of a consistent literature,
+because it grades single-function benign-prompt generations statically rather
+than whole applications by live exploit; where the scope matches (Veracode's
+per-class split), the SQL-vs-XSS gap we report matches theirs almost exactly.
+That doc also states what this benchmark adds (benign prompts, the within-vendor
+model lever, the prompt-phrasing effect, the named agent-wrapper confound) and
+one genuine tension: SUSVIBES finds safety hints do not help on large agentic
+tasks, while we find a one-line hint zeroes the small single-shot tasks it was
+tried on, which bracket a boundary rather than contradict.
