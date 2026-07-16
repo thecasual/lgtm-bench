@@ -63,6 +63,25 @@ rules:
   #            The switch/includes sanitizers above are for the different
   #            shape where the tainted variable itself - not a fresh literal
   #            - is what gets interpolated inside the guarded branch.)
+  #              - ARRAY-NARROWING for the Object.keys identifier shapes: an
+  #                allowlist filter over the key array
+  #                (`$KEYS.filter($K => $ALLOWED.has($K))` /
+  #                `.filter($K => $ALLOWED.includes($K))`) yields a narrowed
+  #                array of only allowed identifiers; a validation loop over the
+  #                whole array (`for (const k of keys) { if (!ALLOWED.has(k))
+  #                throw } ... keys used later`) and the reject-unknowns filter
+  #                guard (`const bad = keys.filter(k => !ALLOWED.has(k)); if
+  #                (bad.length) throw`) clear the array for its later uses; and a
+  #                per-element ESCAPE (`keys.map(k => `"${k.replace(re, '""')}"`)`,
+  #                or a bare `k.replace(re, '""')`) produces properly-doubled,
+  #                double-quoted identifiers that cannot break out of their
+  #                quoting. These clear the allowlisted/escaped field-map answers
+  #                while an un-narrowed `Object.keys(o).map((k, i) => `${k} = $n`)`
+  #                stays flagged. The positional-placeholder map built into a
+  #                variable then joined later (`const ph = keys.map((_, i) =>
+  #                `$${i + 1}`); ph.join(...)`) is also cleared - the discarded
+  #                `_` element and index-only token make it a fixed `$1,$2,...`
+  #                list, not a value interpolation.
   #
   # PROPAGATORS - a `let q = "..."; q += $X;` accumulation chain (JS/TS `+=`
   #            is not always tracked by semgrep's default dataflow the way
@@ -213,6 +232,64 @@ rules:
           - pattern: $QB.where($Q, ...)
           - focus-metavariable: $Q
     pattern-sanitizers: &sanitizers
+      # Array-narrowing: an allowlist filter over the key array yields a
+      # narrowed array whose every surviving element is a member of a fixed
+      # literal set, so the filtered array is safe to interpolate as identifiers.
+      - by-side-effect: false
+        pattern: $KEYS.filter($K => $ALLOWED.has($K))
+      - by-side-effect: false
+        pattern: $KEYS.filter($K => $ALLOWED.includes($K))
+      # Guard-then-use over the whole array: a `for (const k of keys) { if
+      # (!ALLOWED.has(k)) throw } ... keys used later` validation loop clears the
+      # array for all later uses (every element was checked against a fixed set).
+      - by-side-effect: false
+        patterns:
+          - pattern-inside: |
+              for (const $K of $ARR) {
+                if (!$ALLOWED.has($K)) { ... }
+                ...
+              }
+              ...
+          - pattern: $ARR
+      - by-side-effect: false
+        patterns:
+          - pattern-inside: |
+              for (const $K of $ARR) {
+                if (!$ALLOWED.includes($K)) { ... }
+                ...
+              }
+              ...
+          - pattern: $ARR
+      # Reject-unknowns guard: `const unknown = keys.filter(k => !ALLOWED.has(k));
+      # if (unknown.length) throw; ... keys used later`. The array is cleared for
+      # its later uses once the reject-list has been proven empty.
+      - by-side-effect: false
+        patterns:
+          - pattern-inside: |
+              $U = $ARR.filter($K => !$ALLOWED.has($K))
+              ...
+          - pattern: $ARR
+      - by-side-effect: false
+        patterns:
+          - pattern-inside: |
+              $U = $ARR.filter($K => !$ALLOWED.includes($K))
+              ...
+          - pattern: $ARR
+      # Escaped SQL identifier: a double-quoted identifier whose internal double
+      # quotes are doubled (`.replace(..., '""')`, wrapped in `"..."`) cannot
+      # break out of its quoting, so the produced identifier is safe.
+      - by-side-effect: false
+        pattern: $X.replace($RE, '""')
+      # Per-element escaped identifier map: `$ARR.map($E => `"${$E.replace(...,
+      # '""')}"`).join(...)` produces a list of properly-escaped, double-quoted
+      # identifiers, so the joined result is safe even though the key array
+      # itself carries taint (mirrors the placeholder-list map sanitizers below).
+      - by-side-effect: false
+        patterns:
+          - pattern: $ARR.map(($E) => $BODY).join(...)
+          - metavariable-pattern:
+              metavariable: $BODY
+              pattern: '`...${$E.replace($RE, ''""'')}...`'
       - by-side-effect: false
         patterns:
           - pattern: $MAP[$KEY]
@@ -294,6 +371,23 @@ rules:
       - by-side-effect: false
         patterns:
           - pattern: $ARR.map(($E, $I) => $EXPR).join(...)
+          - metavariable-pattern:
+              metavariable: $EXPR
+              pattern-either:
+                - pattern: "`...${$I}...`"
+                - pattern: "`...${$I + $N}...`"
+      # Same positional-placeholder map, but built into a variable and joined in
+      # a later statement (`const ph = arr.map((_, i) => `$${i + 1}`); ...
+      # ph.join(...)`). The element parameter is explicitly discarded (`_`) and
+      # the produced token references only the INDEX, so the mapped array is a
+      # fixed `$1,$2,...` placeholder list and is safe even though the source
+      # array carries taint; sanitize the map result itself so the un-chained
+      # `.join` on the placeholder variable stays clean. Restricted to the `_`
+      # element form so an element-interpolating map (`(field, i) => `${field} =
+      # $${i}``, the genuine identifier-injection shape) is NOT cleared.
+      - by-side-effect: false
+        patterns:
+          - pattern: $ARR.map((_, $I) => $EXPR)
           - metavariable-pattern:
               metavariable: $EXPR
               pattern-either:

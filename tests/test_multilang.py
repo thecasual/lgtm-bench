@@ -14,7 +14,8 @@ import pytest
 
 from lgtm_bench.detectors import PACK_VERSIONS, get_pack, pack_version_for
 from lgtm_bench.detectors.semgrep import semgrep_available
-from lgtm_bench.grading import _is_valid, _is_valid_go, _is_valid_rust, _run_pack
+from lgtm_bench.grading import (_is_valid, _is_valid_go, _is_valid_rust,
+                                _is_valid_typescript, _run_pack)
 from lgtm_bench.schema import (ArtifactKind, Condition, TaskSpec, TrialRecord,
                                Variant, Mode)
 
@@ -122,6 +123,49 @@ def test_rust_validity_heuristic():
     prose = "Here is how you would safely query the database in Rust."
     assert _is_valid_rust(prose) is False
     assert _is_valid(prose, _task("rust")) is False
+
+
+# --- duplicate top-level def is gradable, NOT invalid (det regression) ------
+# A model answer that concatenates two independently-complete blocks (e.g. a
+# sync and an async version of the same function, or a naive version shown
+# before a safe rewrite) must be graded whole via semgrep, not discarded as
+# INVALID up front. Grading only the last block is wrong for these languages
+# because an aliased sink defined in a later block (`execAsync = promisify(exec)`)
+# would be missed; whole-file union grading is required. See grading.py
+# `_is_valid_go`/`_is_valid_rust`/`_is_valid_typescript` and `_shadowed_lines`.
+
+def test_go_duplicate_toplevel_def_is_valid_not_invalid():
+    code = (
+        "func resizeImage(path string) error {\n"
+        "\treturn nil\n"
+        "}\n"
+        "\n"
+        "func resizeImage(path string) error {\n"
+        "\treturn nil\n"
+        "}\n"
+    )
+    assert _is_valid_go(code) is True
+    assert _is_valid(code, _task("go")) is True
+
+
+def test_rust_duplicate_toplevel_def_is_valid_not_invalid():
+    code = (
+        "fn resize_image(path: &str) -> bool {\n    true\n}\n"
+        "\n"
+        "async fn resize_image(path: &str) -> bool {\n    true\n}\n"
+    )
+    assert _is_valid_rust(code) is True
+    assert _is_valid(code, _task("rust")) is True
+
+
+def test_typescript_duplicate_toplevel_def_is_valid_not_invalid():
+    code = (
+        "function resizeImage(path: string): void {\n  return;\n}\n"
+        "\n"
+        "async function resizeImage(path: string): Promise<void> {\n  return;\n}\n"
+    )
+    assert _is_valid_typescript(code) is True
+    assert _is_valid(code, _task("typescript")) is True
 
 
 # --- trial record carries language ----------------------------------------

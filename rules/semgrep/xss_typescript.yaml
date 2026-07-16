@@ -329,6 +329,15 @@ rules:
   # audit removed - those never carry this attribute. The taint
   # `React.createElement(..., { dangerouslySetInnerHTML: {...} })` rule above
   # still covers the compiled/createElement form on its own.
+  #
+  # The exclusions below cover BOTH the inline form (`__html: DOMPurify.sanitize
+  # (x)`) AND the far-more-common assign-then-use form real components write
+  # (`const clean = DOMPurify.sanitize(x); ... __html: clean`), including the
+  # value being wrapped in `useMemo(() => DOMPurify.sanitize(...), [...])` and a
+  # helper wrapper (`function sanitizeComment(x){ return DOMPurify.sanitize(...) }
+  # ... const clean = sanitizeComment(text); ... __html: clean`). Generic mode
+  # has no dataflow, so these are spelled out structurally; each keys on an
+  # actual sanitizer call, so a raw `__html: text` pass-through stays flagged.
   - id: xss.ts.jsx-dangerously-set-inner-html
     languages: [generic]
     severity: ERROR
@@ -340,7 +349,66 @@ rules:
       parser-gap note above).
     patterns:
       - pattern: "dangerouslySetInnerHTML={{ ... }}"
+      # Inline sanitization: `__html: DOMPurify.sanitize(x)` etc.
       - pattern-not: "dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(...) }}"
       - pattern-not: "dangerouslySetInnerHTML={{ __html: escapeHtml(...) }}"
       - pattern-not: "dangerouslySetInnerHTML={{ __html: he.encode(...) }}"
       - pattern-not: "dangerouslySetInnerHTML={{ __html: escape(...) }}"
+      # Assign-then-use sanitization: real code binds the sanitized markup to a
+      # variable first (`const clean = DOMPurify.sanitize(x); ... __html: clean`)
+      # rather than inlining it. Generic mode has no dataflow, so exclude the
+      # finding when the __html variable was assigned from a recognized
+      # sanitizer/escaper earlier in the same component. The trailing/leading
+      # `...` around the sanitizer call also cover the value being wrapped in a
+      # `useMemo(() => DOMPurify.sanitize(...), [...])` memo. The raw
+      # `__html: text` true positives have no such binding and stay flagged.
+      - pattern-not-inside: |
+          const $X = ... DOMPurify.sanitize(...) ...
+          ...
+          dangerouslySetInnerHTML={{ __html: $X }}
+      - pattern-not-inside: |
+          const $X = ... $SAN.sanitize(...) ...
+          ...
+          dangerouslySetInnerHTML={{ __html: $X }}
+      - pattern-not-inside: |
+          const $X = ... escapeHtml(...) ...
+          ...
+          dangerouslySetInnerHTML={{ __html: $X }}
+      - pattern-not-inside: |
+          const $X = ... he.encode(...) ...
+          ...
+          dangerouslySetInnerHTML={{ __html: $X }}
+      - pattern-not-inside: |
+          const $X = ... escape(...) ...
+          ...
+          dangerouslySetInnerHTML={{ __html: $X }}
+      # Wrapper helper: `function sanitizeComment(x) { return DOMPurify.sanitize
+      # (...) } ... const clean = sanitizeComment(text); ... __html: clean`. Only
+      # excluded when the helper's body actually calls a recognized sanitizer, so
+      # an unsanitized pass-through wrapper is NOT cleared.
+      - pattern-not-inside: |
+          function $SANFN(...) { ... DOMPurify.sanitize(...) ... }
+          ...
+          const $X = $SANFN(...)
+          ...
+          dangerouslySetInnerHTML={{ __html: $X }}
+      - pattern-not-inside: |
+          function $SANFN(...) { ... $SAN.sanitize(...) ... }
+          ...
+          const $X = $SANFN(...)
+          ...
+          dangerouslySetInnerHTML={{ __html: $X }}
+      # Same wrapper shape, but the helper carries an explicit return-type
+      # annotation (`function sanitizeComment(x: string): string { ... }`).
+      - pattern-not-inside: |
+          function $SANFN(...): $T { ... DOMPurify.sanitize(...) ... }
+          ...
+          const $X = $SANFN(...)
+          ...
+          dangerouslySetInnerHTML={{ __html: $X }}
+      - pattern-not-inside: |
+          function $SANFN(...): $T { ... $SAN.sanitize(...) ... }
+          ...
+          const $X = $SANFN(...)
+          ...
+          dangerouslySetInnerHTML={{ __html: $X }}
