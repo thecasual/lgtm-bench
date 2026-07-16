@@ -159,7 +159,7 @@ as directional, closer to the audited bar than a fresh `v0.1.0` pack but not
 yet at population-audit confidence, exactly the caveat this document already
 applies to Rust's lower-bound gap.
 
-### `sql-typescript@0.3.1` (Semgrep taint): pilot-audited, approaching the audited bar
+### `sql-typescript@0.3.2` (Semgrep taint): pilot-audited, approaching the audited bar
 
 A structural mirror of the audited `sql-go`/`sql-rust` packs
 (`rules/semgrep/sql_typescript.yaml`), extended to a fourth language because
@@ -183,7 +183,16 @@ TypeScript has no in-process parser here, so taint mode is the only option
   mirror, and a `switch` remap).
 - **Propagators**: `let q = ...; q += ...;` template-literal accumulation.
 
-Corpus: 27 safe, 23 vulnerable samples (`tests/detector_corpus/sql-typescript/`).
+`0.3.2` closed one false positive found after the pilot: when the bind-params
+array is built with `$ARR.push(value)` and the query text interpolates only the
+placeholder index (`` `$${params.length}` ``, an integer count, not the value),
+the trial is safe (the value is bound, not interpolated). A sanitizer scoped to
+the `.length` of a `.push`-built array clears this without touching a genuine
+no-allowlist identifier-injection answer, which interpolates a raw string, not a
+`.push`-array length. On the published run this flipped exactly one trial
+(a `claude-sonnet-5` `update-profile-fields` answer) from vulnerable to secure.
+
+Corpus: 31 safe, 25 vulnerable samples (`tests/detector_corpus/sql-typescript/`).
 
 ### `cmdi-python@0.1.1` (AST detector): approaching the audited bar
 

@@ -300,6 +300,26 @@ rules:
         pattern: Number(...)
       - by-side-effect: false
         pattern: parseInt(...)
+      # `.length` of an array that was built up with `.push(...)` is a
+      # non-negative integer count, never the tainted content, so it cannot
+      # carry SQL syntax. This clears the pg positional-placeholder idiom
+      # `$${values.length}` (a bound-parameter INDEX like `$7`) that a model
+      # builds after pushing a value onto the *bind-params* array:
+      # `values.push(userId)` taints `values` via the push propagator, but
+      # interpolating `values.length` only emits the placeholder number, not
+      # `userId` (whose real value is bound, not interpolated). Scoped to a
+      # pushed array on purpose - an `Object.keys(...)`-sourced identifier array
+      # is never `.push`ed, so its own `.length` (the WHERE-placeholder count in
+      # a genuine no-allowlist identifier-injection answer) stays tainted and the
+      # answer stays flagged. Sanitizing only the `.length` sub-expression (not
+      # the enclosing template) also leaves any co-interpolated tainted value
+      # flagged, so this cannot open a false-negative hole.
+      - by-side-effect: false
+        patterns:
+          - pattern-inside: |
+              $ARR.push(...)
+              ...
+          - pattern: $ARR.length
       # Allowlist ternary: `ALLOWED.includes(x) ? x : default`.
       - by-side-effect: false
         pattern: "$ALLOWED.includes($X) ? $X : $DEFAULT"
