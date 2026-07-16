@@ -5,6 +5,16 @@ build/
 dist/
 results/
 report.md
+report.html
+evidence.md
+/export.json
+*.db
 .pytest_cache/
 .env
 *.regrade.tmp
+.DS_Store
+*.bak
+*.orig
+*~
+.venv/
+venv/

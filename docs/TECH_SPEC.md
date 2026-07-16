@@ -2,42 +2,21 @@
 
 **Status:** Final v1.0 (approved for build) · **Last updated:** 2026-07-13
 
-> **Status addendum (2026-07-15).** This spec is the approved v1.0 design and is not
-> rewritten below to track delivery; treat the body as the plan of record and this note as
-> the current-state pointer. Since approval: the Ollama runner shipped (§5.3), so open-weight
-> models are now measured alongside the Claude-family runs. Go and Rust task packs shipped
-> with Semgrep taint-mode detectors, now at `sql-go@0.3.0` / `sql-rust@0.3.0` and independently
-> audited. For the detector audit trail, including the Python detector's nine-version history
-> and the Go/Rust taint packs, see `docs/METHODOLOGY.md`.
->
-> **Second status addendum (2026-07-15).** The category roadmap in §10 moved from a single
-> shipped `sql` pack to three: `sql` (CWE-89), `command-injection` (CWE-78), and `xss` (CWE-79).
-> Category label/CWE metadata is now a single registry, `lgtm_bench/categories.py`
-> (`CATEGORY_META`), that both `report.py` and `export.py` read. TypeScript shipped
-> as a fourth language, carrying three new (category, language) packs at `v0.1.0`:
-> `sql-typescript`, `command-injection-typescript`, `xss-typescript` (Semgrep taint mode, no
-> in-process TS parser, same reasoning as Go/Rust in §7.2). `command-injection-python` shipped
-> at `v0.1.0` as an AST detector (`cmdi_ast.py`, mirroring `sql_ast.py`'s CONST/allowlist
-> machinery). §2's `Mode` enum gained a third value, `review`: the model is shown a function
-> with a planted vulnerability and asked for a prose review only (no rewrite, no tools;
-> `conditions: [none]` only); grading skips the code-validity gate and scores `flagged_existing`
-> off the same flag-lexicon §7.3 already defines for edit-mode remediation. Review mode is its
-> own report section and is excluded from headline VIR, the same convention edit-mode trials
-> already follow. `TrialRecord` gained a `category` field (§3.3) so category no longer has to be
-> recovered from the task-id prefix. None of the four `v0.1.0` cells above has been through the
-> population-level adversarial audit the Python/Go/Rust SQL packs went through; see
-> `docs/METHODOLOGY.md` for the honest per-pack status and the source/sink/sanitizer model of
-> each.
->
-> **Third status addendum (2026-07-15).** The four cells above shipping at `v0.1.0` was a
-> point-in-time snapshot, not their permanent status: each has since had its flagged Claude
-> trials pilot-audited and confirmed false positives fixed, landing as a version bump. Current
-> versions are always in `lgtm_bench/detectors/__init__.py::PACK_VERSIONS`; treat any specific
-> version string in this spec's body as a snapshot rather than the live value. The pilot audit
-> is narrower than the population-level audit Python/Go/Rust SQL received (it swept only
-> flagged trials for false positives, not the unflagged population for false negatives), so
-> the population-level audit statement above still holds even as version numbers move; see
-> `docs/METHODOLOGY.md` for the exact pilot findings per pack.
+> **Current-state note.** This spec is the approved v1.0 design; the body is the plan of
+> record and is not rewritten to track delivery. Net state since approval: the Ollama runner
+> shipped (§5.3), so open-weight models are measured alongside the Claude runs, and the
+> benchmark spans four languages (Python, Go, Rust, TypeScript) and three categories, `sql`
+> (CWE-89), `command-injection` (CWE-78), and `xss` (CWE-79), with label/CWE metadata
+> centralized in `lgtm_bench/categories.py` (`CATEGORY_META`, read by both `report.py` and
+> `export.py`). Go, Rust, and TypeScript use Semgrep taint-mode detectors; `command-injection-
+> python` is an AST detector (`cmdi_ast.py`, mirroring `sql_ast.py`). `Mode` gained a third
+> value, `review` (prose-only review of a planted vulnerability, `conditions: [none]`,
+> excluded from headline VIR like edit mode), and `TrialRecord` gained a `category` field
+> (§3.3). Live detector versions are always in
+> `lgtm_bench/detectors/__init__.py::PACK_VERSIONS`; treat version strings in this body as
+> snapshots. The Python/Go/Rust SQL packs went through a population-level adversarial audit
+> (false positives and false negatives); the TypeScript and `command-injection` packs had a
+> narrower flagged-only pilot audit. See `docs/METHODOLOGY.md` for the per-pack audit trail.
 
 ## 1. Overview
 

@@ -84,9 +84,9 @@ test suite is **200 tests**.
 
 ## Go and Rust taint packs
 
-The Go and Rust SQL detectors went through their own three-version audit trail, run this
-session, following the same discipline as the Python detector above (real findings, encoded
-as a fix plus a regression sample).
+The Go and Rust SQL detectors went through their own three-version audit trail, following
+the same discipline as the Python detector above (real findings, encoded as a fix plus a
+regression sample).
 
 - `sql-go@0.1` / `sql-rust@0.1`: pattern-based, search-mode Semgrep rules with no dataflow
   analysis. This produced a detector artifact rather than a true reading: cross-language
