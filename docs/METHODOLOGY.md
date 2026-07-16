@@ -333,6 +333,21 @@ file is where the explanation stays put.
   comparison of *willingness to emit code under the product wrapper*, not purely of the
   underlying model's tendency to write vulnerable code. §5.3 of `docs/TECH_SPEC.md` describes
   the raw-API runner that would remove this confound; it has not yet been run.
+  `docs/examples.md` shows the same task graded vulnerable under the clean-room
+  headless runner and secure in an interactive Claude Code session that had the
+  user's security-writing context, which is this confound made concrete.
+
+- **Prompt wording moves the result about as hard as model choice does.** The same task
+  asked four ways (plain, terse, contextual, speed-pressure) carries a roughly 2x spread in
+  pooled VIR: terse and speed-pressure are the highest, plain and contextual lower, and a
+  single safety-hint clause drops the cells where it was tried to zero. Within a single model
+  on a single task, "keep it short / don't overthink it" repeatedly deletes an allow-list or
+  unknown-field check the plain phrasing writes on its own (an 8-for-8 to 0-for-8 flip on
+  `qwen3:14b`/`sql/order-by-column`, and clean two-trial flips on `claude-sonnet-5` and
+  `claude-sonnet-4-5`). Verbatim before/after pairs are in `docs/examples.md`. This means any
+  single headline VIR is conditioned on the prompt distribution used to produce it; a bench
+  weighted toward neutral phrasings reads safer than one weighted toward rushed phrasings, for
+  the same models.
 
 - **The trial-weighted pooled VIR is easy to mistake for a balanced cross-model average.**
   Trial counts per model are not equal in this PoC: some open-weight models ran at a much
