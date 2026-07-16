@@ -3,7 +3,7 @@
 - **Harness:** 0.1.0 · **Runs:** 2026-07-13T03-40-43Z, 2026-07-13T03-55-29Z, 2026-07-13T14-33-26Z, 2026-07-13T14-41-21Z, 2026-07-14T15-26-28Z, 2026-07-14T15-38-02Z, 2026-07-14T20-11-57Z, 2026-07-15T02-09-30Z, 2026-07-15T02-19-07Z, 2026-07-15T04-05-04Z, 2026-07-15T16-39-29Z, 2026-07-15T19-00-05Z
 - **Trials:** 3938 total across 4 language(s) (python, go, rust, typescript); 383 invalid (0 runner errors, 383 genuinely ungradable output)
 - **Models:** claude-fable-5, claude-haiku-4-5, claude-opus-4-1, claude-opus-4-8, claude-sonnet-4-5, claude-sonnet-5, llama3.2:3b, qwen2.5-coder:7b, qwen3:8b, qwen3:14b
-- **Detector packs (read from the records, set by the offline grade):** cmdi-python@0.1.1, cmdi-typescript@0.2.0, sql-go@0.3.0, sql-rust@0.3.0, sql-typescript@0.3.1, sql@0.9.0, xss-typescript@0.3.1
+- **Detector packs (read from the records, set by the offline grade):** cmdi-python@0.1.1, cmdi-typescript@0.2.0, sql-go@0.3.0, sql-rust@0.3.0, sql-typescript@0.3.2, sql@0.9.0, xss-typescript@0.3.1
 - **Semgrep on this reporting host:** installed. This affects only re-grading here, not the verdicts above (those were graded offline). Python carries an AST backstop, so its verdicts reproduce without semgrep; Go and Rust have no backstop and require semgrep to re-grade.
 - **Fixture version:** 1
 
@@ -50,7 +50,7 @@ Net-new-code (`mode: generate`) **SQL** tasks in **Python** only, so all three c
 
 The same everyday tasks, ported to other languages, condition `none`, new code. This is the one place Go and Rust appear.
 
-**Earlier drafts put Go and Rust at roughly 4x Python. That gap was a detector artifact, and it is gone.** The first Go/Rust grader was a pattern-based Semgrep rule with no dataflow: it flagged safe idioms as injections. `fmt.Sprintf` building a `?`-placeholder list with values passed as `args...`, allowlisted `ORDER BY` where the column comes from a map or switch, integer `LIMIT`/`OFFSET`. An independent adversarial audit hand-read every flagged trial and found most were false positives on safe code. The current packs (`cmdi-typescript@0.2.0`, `sql-go@0.3.0`, `sql-rust@0.3.0`, `sql-typescript@0.3.1`, `xss-typescript@0.3.1`) use Semgrep **taint mode**: they follow untrusted input from source to sink and recognise the sanitizing idioms, and a second independent audit confirmed they match the hand-audit. Go flags exactly the truly injectable trials (zero false-positive, zero false-negative on the population); Rust is zero false-positive. The corrected picture mirrors Python: frontier models rarely inject in any language, the weak and open-weight models carry the double-digit rates.
+**Earlier drafts put Go and Rust at roughly 4x Python. That gap was a detector artifact, and it is gone.** The first Go/Rust grader was a pattern-based Semgrep rule with no dataflow: it flagged safe idioms as injections. `fmt.Sprintf` building a `?`-placeholder list with values passed as `args...`, allowlisted `ORDER BY` where the column comes from a map or switch, integer `LIMIT`/`OFFSET`. An independent adversarial audit hand-read every flagged trial and found most were false positives on safe code. The current packs (`cmdi-typescript@0.2.0`, `sql-go@0.3.0`, `sql-rust@0.3.0`, `sql-typescript@0.3.2`, `xss-typescript@0.3.1`) use Semgrep **taint mode**: they follow untrusted input from source to sink and recognise the sanitizing idioms, and a second independent audit confirmed they match the hand-audit. Go flags exactly the truly injectable trials (zero false-positive, zero false-negative on the population); Rust is zero false-positive. The corrected picture mirrors Python: frontier models rarely inject in any language, the weak and open-weight models carry the double-digit rates.
 
 **Rust is a lower bound.** A hand-audit of the Rust trials found real injections built with a Vec-accumulate-then-join pattern that open-source Semgrep's intraprocedural taint can't follow (on the Claude population, 3/165 by rule vs 6/165 hand-counted). The table shows rule output, so the true Rust rate is modestly higher than printed, consistent with VIR being a lower bound everywhere. Closing this last gap needs interprocedural analysis (CodeQL); it is the one place the open-source engine hits a wall.
 
@@ -61,13 +61,13 @@ The same everyday tasks, ported to other languages, condition `none`, new code. 
 | `claude-opus-4-1` | 0% (0-9, n=41) | 0% (0-11, n=31) | 0% (0-12, n=28) | 0% (0-11, n=30) |
 | `claude-opus-4-8` | 2% (0-12, n=42) | 0% (0-11, n=32) | 0% (0-12, n=28) | 0% (0-11, n=30) |
 | `claude-sonnet-4-5` | 22% (13-36, n=45) | 19% (9-35, n=32) | 7% (2-23, n=28) | 4% (1-21, n=23) |
-| `claude-sonnet-5` | 8% (3-21, n=37) | 4% (1-18, n=27) | 0% (0-12, n=28) | 5% (1-22, n=22) |
+| `claude-sonnet-5` | 8% (3-21, n=37) | 4% (1-18, n=27) | 0% (0-12, n=28) | 0% (0-15, n=22) |
 | `llama3.2:3b` | 26% (18-36, n=88) | 20% (11-35, n=44) | 11% (4-25, n=36) | - |
 | `qwen2.5-coder:7b` | 31% (26-35, n=360) | 29% (23-35, n=248) | 17% (13-23, n=224) | - |
 | `qwen3:8b` | 20% (13-30, n=85) | 20% (12-32, n=60) | 11% (5-21, n=56) | - |
 | `qwen3:14b` | 16% (13-20, n=368) | 19% (15-24, n=248) | 13% (10-18, n=232) | - |
 
-**Pooled across models:** python 20% (18-23, n=1146) trial-weighted, 15% averaging models equally (no CI); go 19% (17-22, n=782) trial-weighted, 12% averaging models equally (no CI); rust 12% (9-14, n=713) trial-weighted, 6% averaging models equally (no CI); typescript 3% (1-7, n=157) trial-weighted, 3% averaging models equally (no CI).
+**Pooled across models:** python 20% (18-23, n=1146) trial-weighted, 15% averaging models equally (no CI); go 19% (17-22, n=782) trial-weighted, 12% averaging models equally (no CI); rust 12% (9-14, n=713) trial-weighted, 6% averaging models equally (no CI); typescript 3% (1-6, n=157) trial-weighted, 3% averaging models equally (no CI).
 
 _The trial-weighted figure is dominated by `qwen2.5-coder:7b`, `qwen3:14b`: they ran the most trials per cell (K=1-8 (varies by model)), so most of the pooled weight is those runs, not a cross-model average. The equal-weight figure (each model once) is the more defensible cross-model rate; read it as the headline and the trial-weighted pool as trial volume._
 
@@ -84,7 +84,7 @@ Per-model verdict for **every category present**, scoped per category **and lang
 | `sql` | `go` | CWE-89 | 19% (17-22, n=782) | inconclusive | standing risk | inconclusive | inconclusive | standing risk | inconclusive | standing risk | standing risk | standing risk | standing risk |
 | `sql` | `python` | CWE-89 | 20% (18-22, n=1178) | inconclusive | standing risk | inconclusive | inconclusive | standing risk | inconclusive | standing risk | standing risk | standing risk | standing risk |
 | `sql` | `rust` | CWE-89 | 12% (9-14, n=713) | inconclusive | inconclusive | inconclusive | inconclusive | inconclusive | inconclusive | inconclusive | standing risk | standing risk | standing risk |
-| `sql` | `typescript` | CWE-89 | 3% (1-7, n=157) | inconclusive | inconclusive | inconclusive | inconclusive | inconclusive | inconclusive | n/a | n/a | n/a | n/a |
+| `sql` | `typescript` | CWE-89 | 3% (1-6, n=157) | inconclusive | inconclusive | inconclusive | inconclusive | inconclusive | inconclusive | n/a | n/a | n/a | n/a |
 | `xss` | `typescript` | CWE-79 | 13% (8-20, n=125) | inconclusive | standing risk | inconclusive | inconclusive | standing risk | inconclusive | n/a | n/a | n/a | n/a |
 
 ## Flip rate (nondeterminism, Python only)
