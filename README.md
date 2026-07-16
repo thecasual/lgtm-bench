@@ -50,7 +50,7 @@ injection and XSS are Claude-only so far.
 - [docs/METHODOLOGY.md](docs/METHODOLOGY.md): how verdicts are decided and how the grader was validated
 - [docs/REPRODUCE.md](docs/REPRODUCE.md): reproduce the report from scratch, plus a glossary
 - [docs/TECH_SPEC.md](docs/TECH_SPEC.md): the full design
-- [docs/poc-evidence.md](docs/poc-evidence.md): every trial: prompt → output → findings → verdict
+- [docs/poc-evidence-vulnerable.md](docs/poc-evidence-vulnerable.md): every flagged trial: prompt → output → findings → verdict (the full per-trial dump is not tracked; regenerate it with `lgtm evidence results-published/run-*.jsonl --out docs/poc-evidence.md`)
 - [docs/related-work.md](docs/related-work.md): five recent studies, how our numbers compare, and what this extends
 - [docs/examples.md](docs/examples.md): worked before/after examples (prompt-tweak flips, the context lever)
 
@@ -158,9 +158,11 @@ lgtm evidence results/*.jsonl --verdict vulnerable --out v.md   # just the flagg
 lgtm evidence results/*.jsonl --task-filter order-by --model claude-sonnet-5
 ```
 
-Rendered snapshots for this repo's run live at `docs/poc-evidence.md` (all
-trials) and `docs/poc-evidence-vulnerable.md` (flagged subset); the raw JSONL
-ground truth is under `results-published/`.
+The tracked rendered snapshot for this repo's run is
+`docs/poc-evidence-vulnerable.md` (flagged subset). The full per-trial dump (all
+trials) is not tracked; regenerate it on demand with `lgtm evidence
+results-published/run-*.jsonl --out docs/poc-evidence.md`. The raw JSONL ground
+truth is under `results-published/`.
 
 ## Status
 

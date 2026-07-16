@@ -30,6 +30,13 @@ committed raw outputs with `lgtm detect` and needs no model calls.
   hide the real split (below).
 - **By language:** Go 19.2%, Python 17.8%, Rust 11.6%, TypeScript 7.7%.
 
+These are small-per-cell point estimates: read them with the Wilson 95% CIs in
+`docs/poc-report.md`, not as decision-grade figures. In particular the XSS and
+command-injection numbers are Claude-only (no open-weight runs on those classes
+yet, a v1.1 roadmap item) and, like every non-SQL cell, come from packs that had
+only a flagged-only pilot audit, so they are conservative floors that can only
+undercount.
+
 ## The three findings that matter
 
 **1. Model choice is the biggest lever, and it is a 10x swing.** On the exact
@@ -83,4 +90,5 @@ lgtm report /tmp/run-*.jsonl --tasks tasks --out /tmp/report.md
 ```
 
 Full method: `docs/METHODOLOGY.md`. Full report: `docs/poc-report.md`. Every
-trial: `docs/poc-evidence.md`.
+flagged trial: `docs/poc-evidence-vulnerable.md` (regenerate the full per-trial
+dump with `lgtm evidence results-published/run-*.jsonl --out docs/poc-evidence.md`).

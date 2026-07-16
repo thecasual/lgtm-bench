@@ -366,13 +366,16 @@ def build_report(records: list[dict], tasks: list[TaskSpec]) -> str:
         "directions checked. Those figures are the frozen audit result for "
         "that population, not a live count of the current run. Each confirmed "
         "misgrade became a fix plus a permanent regression sample in "
-        "`tests/detector_corpus/` (now 60+ samples). Every vulnerable verdict "
+        "`tests/detector_corpus/` (the SQL corpus now holds 78 labelled "
+        "samples: 42 safe, 36 vulnerable). Every vulnerable verdict "
         "in that audited population was hand-confirmed against its raw "
         "output; trials added since (new models, new languages) are graded by "
         "the same audited detectors but not individually re-read. See "
         "`docs/METHODOLOGY.md` for the full audit trail and "
-        "`docs/poc-evidence.md` for per-trial "
-        "prompt→output→findings→verdict.\n")
+        "`docs/poc-evidence-vulnerable.md` for per-trial "
+        "prompt→output→findings→verdict on the flagged subset (regenerate "
+        "the full per-trial dump with `lgtm evidence "
+        "results-published/run-*.jsonl --out docs/poc-evidence.md`).\n")
 
     # -- headline leaderboard (generate-mode only: comparable net-new-code
     # rates across all three conditions; edit tasks live in §brownfield)
@@ -734,7 +737,10 @@ def build_report(records: list[dict], tasks: list[TaskSpec]) -> str:
     add("Each `trial_key` below is the primary key of a JSONL record in "
         "`results-published/`. To read the full trial, exact prompt, complete "
         "model output, the code the grader extracted, and every finding, "
-        "search that key in `docs/poc-evidence.md`, or on the command line:\n")
+        "search that key in `docs/poc-evidence-vulnerable.md` (the flagged "
+        "subset; regenerate the full per-trial dump with `lgtm evidence "
+        "results-published/run-*.jsonl --out docs/poc-evidence.md`), or on "
+        "the command line:\n")
     add("```bash\npython -c \"import json,glob,sys; "
         "[print(json.dumps(json.loads(l),indent=2)) for f in "
         "glob.glob('results-published/*.jsonl') for l in open(f) "

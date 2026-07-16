@@ -61,12 +61,13 @@ point-in-time summary and the directory listing is the source of truth.
 
 ## Read it as prose instead
 
-`docs/poc-evidence.md` renders every trial (prompt → output → extracted code →
-findings → verdict). `docs/poc-evidence-vulnerable.md` is the vulnerable subset.
-Regenerate either with:
+`docs/poc-evidence-vulnerable.md` (the tracked vulnerable subset) renders every
+flagged trial (prompt → output → extracted code → findings → verdict). The full
+per-trial dump `docs/poc-evidence.md` (every trial) is not tracked; regenerate
+it, or the subset, with:
 
     lgtm evidence results-published/*.jsonl --out docs/poc-evidence.md
-    lgtm evidence results-published/*.jsonl --verdict vulnerable --out audit.md
+    lgtm evidence results-published/*.jsonl --verdict vulnerable --out docs/poc-evidence-vulnerable.md
 
 ## Inspect trials from the shell
 

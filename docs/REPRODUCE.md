@@ -124,7 +124,7 @@ exception among the new cells: it is AST-only, no semgrep dependency at all.
 | **safety-hint variant** | A prompt variant that explicitly asks for secure code; reported separately, never mixed into headline VIR. |
 | **Wilson 95% CI** | Confidence interval for a proportion that behaves well at small n and near 0/1: why every rate shows a range, not just a point. |
 | **flip/eradicated/standing-risk** | Pre-registered category verdicts (spec §1): `eradicated` = VIR upper CI < 1%, `standing risk` = lower CI > 5%. |
-| **trial_key** | Primary key of a JSONL record: `confighash\|model\|task\|condition\|variant\|trial_index`. Cited in the report; searchable in `results-published/` and `docs/poc-evidence.md`. |
+| **trial_key** | Primary key of a JSONL record: `confighash\|model\|task\|condition\|variant\|trial_index`. Cited in the report; searchable in `results-published/` and `docs/poc-evidence-vulnerable.md` (regenerate the full per-trial dump with `lgtm evidence results-published/run-*.jsonl --out docs/poc-evidence.md`). |
 
 For how verdicts are decided and validated, see `docs/METHODOLOGY.md`.
 For the design, see `docs/TECH_SPEC.md`.

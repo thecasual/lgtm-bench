@@ -4,8 +4,11 @@ Two things this benchmark shows that are easier to feel than to read off a
 table: a one-line change in *how* you ask flips safe code to vulnerable code,
 and the surrounding *context* the model has about you moves the result just as
 hard. Both are reproduced verbatim from the published runs
-(`results-published/*.regraded.jsonl`). Read `docs/poc-evidence.md` for the
-full prompt to raw-output to verdict chain on any trial named here.
+(`results-published/*.regraded.jsonl`). Read `docs/poc-evidence-vulnerable.md`
+for the full prompt to raw-output to verdict chain on the flagged trials named
+here; regenerate the complete per-trial dump (every trial, including the safe
+side of each flip) with `lgtm evidence results-published/run-*.jsonl --out
+docs/poc-evidence.md`.
 
 A note on what these are: VIR is a lower bound and per-cell samples are small,
 so treat the pooled percentages below as descriptive, not as a controlled

@@ -146,7 +146,13 @@ fix) are `sql-typescript@0.3.1`, `command-injection-typescript@0.2.0`,
 `xss-typescript@0.3.1`, and `command-injection-python@0.1.1`: past the initial
 `v0.1.0` ship, but still short of a population audit. The pilot swept
 **flagged trials for false positives only**; it did not sweep the unflagged
-population for false negatives the way the Python/Go/Rust SQL audits did. Two
+population for false negatives the way the Python/Go/Rust SQL audits did.
+**Because those four cells were never swept for false negatives, and VIR is
+already a lower bound, any injection these packs currently miss stays
+uncounted: their reported VIR can only undercount the true rate. Read every
+`command-injection`, `xss-typescript`, `sql-typescript`, and
+`command-injection-python` number in this run as a conservative floor, never as
+a point estimate that could be biased high.** Two
 of these four packs are structurally close to the audited packs and expected
 to converge fast; two are newer, riskier surfaces. Treat these packs' numbers
 as directional, closer to the audited bar than a fresh `v0.1.0` pack but not
@@ -360,7 +366,11 @@ file is where the explanation stays put.
   in this PoC ran SQL tasks only; command injection and XSS currently have zero open-weight
   trials. "Frontier vs. older vs. open-weight" claims (item 5 of the five things this
   benchmark measures) are evidenced by SQL data alone in this PoC; command injection and XSS
-  so far only compare Claude models against each other.
+  so far only compare Claude models against each other. This is a deliberate v1 scope limit,
+  not a silent gap: the command-injection and XSS cells are Claude-only by design in v1, and
+  running the open-weight models on those categories is a named v1.1 roadmap item (spec §10
+  roadmap). Until those runs land, any command-injection or XSS number here is a Claude-only
+  figure and must not be read as a cross-vendor rate.
 
 - **The cross-language SQL comparison does not generalize to other categories, and TypeScript
   has no open-weight data at all.** Any "TypeScript looks like Python" framing that appears in
@@ -382,9 +392,11 @@ file is where the explanation stays put.
 
 ## How to audit it yourself
 
-- **Read any trial end-to-end:** `docs/poc-evidence.md` renders every trial as
-  prompt → raw output → extracted code → findings → verdict.
-  `docs/poc-evidence-vulnerable.md` is the flagged subset. These two files
+- **Read any trial end-to-end:** `docs/poc-evidence-vulnerable.md` (the tracked
+  flagged subset) renders every flagged trial as prompt → raw output → extracted
+  code → findings → verdict. The full per-trial dump `docs/poc-evidence.md`
+  (every trial) is not tracked; regenerate it with `lgtm evidence
+  results-published/run-*.jsonl --out docs/poc-evidence.md`. These files
   quote `raw_output` verbatim, including whatever punctuation the model used
   (some models use em/en dashes in prose); the project's no-em/en-dash rule
   applies to hand-authored prose in this repo's docs and does not extend to

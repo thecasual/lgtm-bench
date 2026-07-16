@@ -168,7 +168,14 @@ def build_html_report(records: list[dict], tasks: list[TaskSpec]) -> str:
     models = M.sorted_models({r["model"] for r in records})
     n_total = len(records_all)
     n_inv = sum(1 for r in records_all if r["verdict"] == "invalid")
-    n_vuln = sum(1 for r in records if r["verdict"] == "vulnerable")
+    # Masthead flagged-vulnerable count is WHOLE-RUN, computed over records_all,
+    # so it is internally consistent with the other two whole-run masthead stats
+    # (n_total trials, all_models). The report body presents every language
+    # (Cross-language, Category verdicts cover Go/Rust/TypeScript + XSS + cmdi),
+    # so a Python-only count sitting next to "N trials / M models" would read as
+    # a whole-run figure while silently undercounting. The Python-only vulnerable
+    # total still lives in-body (Finding 01 and the per-task/headline tables).
+    n_vuln = sum(1 for r in records_all if r["verdict"] == "vulnerable")
     run_ids = sorted({r.get("run_id", "?") for r in records_all})
     pack = sorted({r.get("detector_pack_version", "") for r in records_all if r.get("detector_pack_version")})
 
