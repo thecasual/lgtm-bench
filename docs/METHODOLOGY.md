@@ -450,7 +450,7 @@ system prompt and product-default sampling, not a bare model API. See the
 `docs/related-work.md` places these numbers against five studies from roughly
 the last year (Veracode's 2025/2026 GenAI reports, SafeGenBench, SecureAgentBench,
 SUSVIBES, and a qualitative vibe-coding field study). Short version: our pooled
-15.6% lower bound sits at the conservative end of a consistent literature,
+15.5% lower bound sits at the conservative end of a consistent literature,
 because it grades single-function benign-prompt generations statically rather
 than whole applications by live exploit; where the scope matches (Veracode's
 per-class split), the SQL-vs-XSS gap we report matches theirs almost exactly.

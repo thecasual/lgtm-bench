@@ -31,10 +31,10 @@ the vulnerability rate by roughly 2x:
 
 | Variant | Vulnerable / valid | Rate |
 | --- | --- | --- |
-| v2-terse | 141 / 711 | 19.8% |
-| v4-speed-pressure | 145 / 811 | 17.9% |
-| v1-plain | 140 / 1188 | 11.8% |
-| v3-contextual | 83 / 707 | 11.7% |
+| v2-terse | 141 / 669 | 21.1% |
+| v4-speed-pressure | 145 / 769 | 18.9% |
+| v3-contextual | 83 / 665 | 12.5% |
+| v1-plain | 139 / 1146 | 12.1% |
 | v5-safety-hint | 0 / 64 | 0.0% |
 
 The shape of that table is the finding. Compressing the ask (terse) or rushing

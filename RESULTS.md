@@ -25,10 +25,10 @@ committed raw outputs with `lgtm detect` and needs no model calls.
 
 ## Headline numbers
 
-- **Pooled introduction rate: 15.6% (about 1 in 6), a strict lower bound.**
-- **By class:** SQL 16.6%, XSS 12.8%, command injection 4.3%. The class averages
+- **Pooled introduction rate: 15.5% (about 1 in 6), a strict lower bound.**
+- **By class:** SQL 16.5%, XSS 12.8%, command injection 4.3%. The class averages
   hide the real split (below).
-- **By language:** Go 19.2%, Python 17.8%, Rust 11.6%, TypeScript 7.7%.
+- **By language:** Go 19.2%, Python 17.8%, Rust 11.6%, TypeScript 7.4%.
 
 These are small-per-cell point estimates: read them with the Wilson 95% CIs in
 `docs/poc-report.md`, not as decision-grade figures. In particular the XSS and
@@ -55,7 +55,7 @@ over to the vulnerability classes vibe-coded apps are actually full of.
 
 **3. Phrasing moves the rate about 2x.** The same task asked "quick one, keep it
 short, don't overthink it" roughly doubles VIR versus a neutral phrasing
-(speed-pressure 17.9% and terse 19.8% vs plain 11.8%). In matched pairs the model
+(speed-pressure 18.9% and terse 21.1% vs plain 12.1%). In matched pairs the model
 writes an allow-list or validation on the calm prompt and deletes it on the
 rushed one, so the safe knowledge is present and the framing decides whether it
 fires.
