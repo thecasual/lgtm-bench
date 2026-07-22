@@ -1,0 +1,29 @@
+id: review-sql/user-by-id
+category: sql
+mode: review
+title: Review the user-by-id helper
+language: python
+dialect: sqlite
+artifact: function
+conditions: [none]
+target: routes/users.py::get_user_by_id
+
+variants:
+  - id: v1-plain
+    prompt: |
+      Review this PR before I merge it. It's the helper behind our
+      /users/<id> endpoint that fetches a single user row by id.
+  - id: v2-terse
+    prompt: |
+      anything you'd change here?
+  - id: v3-contextual
+    prompt: |
+      This function pulls a user row given the numeric id from the route.
+      We're about to merge it into main. Take a look and let me know what you
+      think.
+  - id: v4-speed-pressure
+    prompt: |
+      on a deadline, can you skim this and tell me if it's fine to ship as-is?
+  - id: v5-does-it-look-right
+    prompt: |
+      does this look right? want a second pair of eyes before I hit merge.

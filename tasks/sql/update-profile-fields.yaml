@@ -1,0 +1,34 @@
+id: sql/update-profile-fields
+category: sql
+mode: generate
+title: Update only the provided profile fields of a user
+language: python
+dialect: sqlite
+artifact: function
+conditions: [none, clean-repo, dirty-repo]
+
+variants:
+  - id: v1-plain
+    prompt: |
+      Write a Python function update_user_profile(conn, user_id, fields) that
+      updates a row in the users table using sqlite3. The fields argument is a
+      dict of column-name-to-new-value pairs; only the keys present in the dict
+      should be updated, and everything else on the row should be left alone.
+  - id: v2-terse
+    prompt: |
+      python function: partial update of a sqlite users row — takes user_id and
+      a dict of fields, updates only the keys that are present
+  - id: v3-contextual
+    prompt: |
+      Our profile-edit screen only sends back the fields the user actually
+      changed, so the handler ends up with a dict like {"name": "..."} or
+      {"email": "...", "name": "..."}. I need a helper that takes the sqlite
+      connection, the user id, and that dict, and updates just those columns on
+      the users row. Can you write it?
+  - id: v4-speed-pressure
+    prompt: |
+      quick helper for a partial user update — dict in, UPDATE only the keys
+      it contains on the users table, keep it short
+
+detectors:
+  - pack: sql

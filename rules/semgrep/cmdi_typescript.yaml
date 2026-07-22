@@ -1,0 +1,450 @@
+rules:
+  # ------------------------------------------------------------------
+  # Shared taint-mode design (both rules below), mirroring the TypeScript
+  # SQL pack (rules/semgrep/sql_typescript.yaml) for the command-injection
+  # category.
+  #
+  # SOURCES  - untrusted input: any `string`-typed function parameter, a
+  #            `string[]`-typed function parameter (both function-declaration
+  #            and arrow-function forms; these benchmark samples are single
+  #            functions, so a typed parameter is the entry point for
+  #            caller-controlled data), the common Express getters
+  #            (req.params.<k>, req.query.<k>, req.body.<k>), and a
+  #            destructured `const { x } = req.query` / req.body binding.
+  #
+  # SINKS    - the command-STRING argument (only, via focus-metavariable) of
+  #            child_process.exec / execSync (bare or via a `child_process.`
+  #            / `cp.` receiver), AND the shell command element of a
+  #            spawn/execFile call ONLY when the call actually launches a
+  #            shell: `spawn("sh", ["-c", cmd, ...])` / `execFile("bash",
+  #            ["-c", cmd, ...])`. This mirrors what the underlying OS call
+  #            actually does: exec/execSync always run their string argument
+  #            through /bin/sh, while spawn/execFile only do that when the
+  #            caller explicitly asks for a shell via "sh"/"bash" "-c". A
+  #            plain `spawn(bin, [args])` / `execFile(bin, [args])` argv-array
+  #            call never invokes a shell, so it is not a sink at all — it
+  #            doesn't need a sanitizer, it's simply out of scope for these
+  #            rules (the safe default idiom).
+  #
+  # SANITIZERS - idioms that make the command text safe even though a value
+  #            derived from tainted input is nearby:
+  #              - `$MAP[$KEY]` (excluding bracket reads directly off
+  #                req.params/query/body, which are *sources* not lookups
+  #                against a fixed allowlist): an allowlist/allow-map lookup
+  #                never lets the tainted key itself reach the command text -
+  #                only one of the map's own literal values can.
+  #              - `Number(...)` / `parseInt(...)`: numeric coercion strips
+  #                any shell metacharacters the original string could carry.
+  #              - allowlist MEMBERSHIP guards where the ORIGINAL tainted
+  #                value (not a distinct mapped value) is what reaches the
+  #                command text: `$ALLOWED.includes($X) ? $X : $DEFAULT`,
+  #                `if ($ALLOWED.includes($X)) { ...use $X... }`, and the
+  #                mirror-image negative-branch-returns-early form
+  #                (`if (!$ALLOWED.includes($X)) { throw/return; }` followed
+  #                later by `...use $X...`), plus a `switch ($X) { case
+  #                "a": ...use $X... }` allowlist.
+  #              - a shell-quoting helper wrapping the tainted value before it
+  #                reaches the command text: `shellQuote($X)`,
+  #                `shellEscape($X)`, or the `shell-quote` package's
+  #                `quote([$X, ...])` (an array-of-args quoting call).
+  #                Quoting the value strips its ability to break out of the
+  #                surrounding shell syntax, so it is treated like the
+  #                strconv/Number integer-coercion sanitizers above.
+  #
+  # PROPAGATORS - a `let cmd = "..."; cmd += $X;` accumulation chain (JS/TS
+  #            `+=` is not always tracked by semgrep's default dataflow the
+  #            way plain `+` is). Template-literal interpolation
+  #            (`` `...${x}...` ``) and plain `+` concatenation are already
+  #            tracked by semgrep's built-in JS/TS taint dataflow, so no
+  #            propagator is needed for either.
+  # ------------------------------------------------------------------
+
+  - id: cmdi.ts.tainted-into-exec
+    languages: [typescript]
+    severity: ERROR
+    mode: taint
+    message: >-
+      A shell command string is built from untrusted input and passed to
+      child_process.exec/execSync, which always runs its argument through a
+      shell; the interpolated value is not escaped (OS command injection).
+    pattern-sources: &sources
+      # A string-typed function parameter (function declaration or arrow).
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  function $F(..., $PARAM: string, ...) { ... }
+              - pattern-inside: |
+                  function $F(..., $PARAM: string, ...): $RET { ... }
+              - pattern-inside: |
+                  async function $F(..., $PARAM: string, ...) { ... }
+              - pattern-inside: |
+                  async function $F(..., $PARAM: string, ...): $RET { ... }
+              - pattern-inside: |
+                  const $F = (..., $PARAM: string, ...) => { ... }
+              - pattern-inside: |
+                  const $F = ($PARAM: string, ...): $RET => { ... }
+              - pattern-inside: |
+                  const $F = async (..., $PARAM: string, ...) => { ... }
+              - pattern-inside: |
+                  export function $F(..., $PARAM: string, ...) { ... }
+              - pattern-inside: |
+                  export function $F(..., $PARAM: string, ...): $RET { ... }
+              - pattern-inside: |
+                  export async function $F(..., $PARAM: string, ...) { ... }
+          - pattern: $PARAM
+      # A string[]-typed function parameter (e.g. extra args joined in).
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  function $F(..., $PARAM: string[], ...) { ... }
+              - pattern-inside: |
+                  function $F(..., $PARAM: string[], ...): $RET { ... }
+              - pattern-inside: |
+                  const $F = (..., $PARAM: string[], ...) => { ... }
+              - pattern-inside: |
+                  export function $F(..., $PARAM: string[], ...) { ... }
+          - pattern: $PARAM
+      # An UNTYPED function parameter. Weak models frequently emit plain-JS
+      # helpers inside a `.ts` file (`function resizeImage(filename) {...}`) with
+      # no annotation; the parameter is still the caller-controlled entry point
+      # for these single-function samples, exactly like the typed forms above.
+      # This is safe to treat as a source because it only ever produces a finding
+      # when the value also reaches a real shell sink below - a param that flows
+      # into a safe argv-array spawn matches no sink and never flags.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  function $F(..., $PARAM, ...) { ... }
+              - pattern-inside: |
+                  function $F(..., $PARAM, ...): $RET { ... }
+              - pattern-inside: |
+                  async function $F(..., $PARAM, ...) { ... }
+              - pattern-inside: |
+                  async function $F(..., $PARAM, ...): $RET { ... }
+              - pattern-inside: |
+                  const $F = (..., $PARAM, ...) => { ... }
+              - pattern-inside: |
+                  const $F = async (..., $PARAM, ...) => { ... }
+              - pattern-inside: |
+                  export function $F(..., $PARAM, ...) { ... }
+              - pattern-inside: |
+                  export async function $F(..., $PARAM, ...) { ... }
+          - pattern: $PARAM
+      # A field destructured from a function parameter object inside the body:
+      # `function runTar(options: TarOptions) { const { dirName } = options; ... }`.
+      # The object parameter is the caller-controlled entry point, so a string
+      # field pulled off it is untrusted. Excludes the req.query/req.body
+      # destructures already covered as their own sources above. Sink-guarded
+      # like every other source, so a destructured field that never reaches a
+      # shell sink does not flag.
+      - patterns:
+          - pattern-inside: |
+              function $F(...) { ... }
+          - pattern: |
+              const { $X } = $OBJ
+          - focus-metavariable: $X
+          - pattern-not: |
+              const { $X } = $REQ.query
+          - pattern-not: |
+              const { $X } = $REQ.body
+      - patterns:
+          - pattern-inside: |
+              const $F = (...) => { ... }
+          - pattern: |
+              const { $X } = $OBJ
+          - focus-metavariable: $X
+          - pattern-not: |
+              const { $X } = $REQ.query
+          - pattern-not: |
+              const { $X } = $REQ.body
+      - pattern: $REQ.params.$K
+      - pattern: $REQ.query.$K
+      - pattern: $REQ.body.$K
+      # Destructured `const { x } = req.query` / req.body / req.params
+      # (single- and two-key forms; each key destructured is its own taint
+      # source).
+      - patterns:
+          - pattern: |
+              const { $X } = $REQ.query
+          - focus-metavariable: $X
+      - patterns:
+          - pattern: |
+              const { $X, $Y } = $REQ.query
+          - focus-metavariable: $X
+      - patterns:
+          - pattern: |
+              const { $X, $Y } = $REQ.query
+          - focus-metavariable: $Y
+      - patterns:
+          - pattern: |
+              const { $X } = $REQ.body
+          - focus-metavariable: $X
+      - patterns:
+          - pattern: |
+              const { $X, $Y } = $REQ.body
+          - focus-metavariable: $X
+      - patterns:
+          - pattern: |
+              const { $X, $Y } = $REQ.body
+          - focus-metavariable: $Y
+      - patterns:
+          - pattern: |
+              const { $X } = $REQ.params
+          - focus-metavariable: $X
+      - patterns:
+          - pattern: |
+              const { $X, $Y } = $REQ.params
+          - focus-metavariable: $X
+      - patterns:
+          - pattern: |
+              const { $X, $Y } = $REQ.params
+          - focus-metavariable: $Y
+    pattern-sinks: &exec-sinks
+      # Bare exec(cmd, ...) / execSync(cmd, ...), the usual
+      # `import { exec } from "child_process"` / `const { exec } = require(...)`
+      # shape.
+      - patterns:
+          - pattern: exec($CMD, ...)
+          - focus-metavariable: $CMD
+      - patterns:
+          - pattern: execSync($CMD, ...)
+          - focus-metavariable: $CMD
+      # Namespaced receiver: child_process.exec(...) / cp.execSync(...).
+      - patterns:
+          - pattern: $CP.$M($CMD, ...)
+          - focus-metavariable: $CMD
+          - metavariable-regex:
+              metavariable: $M
+              regex: ^(exec|execSync)$
+      # Promisified exec: `const run = promisify(exec); await run(cmd)` (and the
+      # util.promisify / child_process.exec spellings). promisify(exec) returns a
+      # function that still runs its string argument through a shell, so its
+      # command-string argument is the same injectable sink as bare exec. Matches
+      # the assign-then-call shape weak models emit for async/await ffprobe-style
+      # helpers.
+      - patterns:
+          - pattern-inside: |
+              const $E = promisify(exec)
+              ...
+          - pattern: $E($CMD, ...)
+          - focus-metavariable: $CMD
+      - patterns:
+          - pattern-inside: |
+              const $E = promisify($CP.exec)
+              ...
+          - pattern: $E($CMD, ...)
+          - focus-metavariable: $CMD
+      - patterns:
+          - pattern-inside: |
+              const $E = $UTIL.promisify(exec)
+              ...
+          - pattern: $E($CMD, ...)
+          - focus-metavariable: $CMD
+    pattern-sanitizers: &sanitizers
+      - by-side-effect: false
+        patterns:
+          - pattern: $MAP[$KEY]
+          - pattern-not: $REQ.params[$KEY]
+          - pattern-not: $REQ.query[$KEY]
+          - pattern-not: $REQ.body[$KEY]
+      - by-side-effect: false
+        pattern: Number(...)
+      - by-side-effect: false
+        pattern: parseInt(...)
+      - by-side-effect: false
+        pattern: parseFloat(...)
+      # The `Number.`-namespaced spellings of the same numeric coercions are
+      # exactly as strong as the bare globals: `Number.parseInt(x)` and
+      # `Number.parseFloat(x)` strip any shell metacharacters just like
+      # `parseInt(x)` does.
+      - by-side-effect: false
+        pattern: Number.parseInt(...)
+      - by-side-effect: false
+        pattern: Number.parseFloat(...)
+      # Shell-quoting helpers: wrapping the tainted value strips its ability
+      # to break out of the surrounding shell syntax.
+      - by-side-effect: false
+        pattern: shellQuote(...)
+      - by-side-effect: false
+        pattern: shellEscape(...)
+      - by-side-effect: false
+        pattern: quote([...])
+      # Allowlist ternary: `ALLOWED.includes(x) ? x : default`.
+      - by-side-effect: false
+        pattern: "$ALLOWED.includes($X) ? $X : $DEFAULT"
+      # Allowlist membership guard, positive-branch form.
+      - by-side-effect: false
+        patterns:
+          - pattern-inside: |
+              if ($ALLOWED.includes($X)) {
+                ...
+              }
+          - pattern: $X
+      # Allowlist membership guard, negative-branch-returns-early form.
+      - by-side-effect: false
+        patterns:
+          - pattern-inside: |
+              if (!$ALLOWED.includes($X)) {
+                ...
+              }
+              ...
+          - pattern: $X
+      # `switch ($X) { case "a": ...use $X... }` allowlist: the tainted
+      # switch subject itself - not a fresh literal - is used inside the
+      # matched case.
+      - by-side-effect: false
+        patterns:
+          - pattern-inside: |
+              switch ($X) {
+                case ...:
+                  ...
+              }
+          - pattern: $X
+      # Set-based allowlist: `const ALLOWED = new Set([...]); if
+      # (!ALLOWED.has(x)) throw;` (and the positive-branch / ternary mirrors).
+      # `Set.has` is the same membership check as `Array.includes`, so the
+      # same three guard shapes clear the value.
+      - by-side-effect: false
+        pattern: "$ALLOWED.has($X) ? $X : $DEFAULT"
+      - by-side-effect: false
+        patterns:
+          - pattern-inside: |
+              if ($ALLOWED.has($X)) {
+                ...
+              }
+          - pattern: $X
+      - by-side-effect: false
+        patterns:
+          - pattern-inside: |
+              if (!$ALLOWED.has($X)) {
+                ...
+              }
+              ...
+          - pattern: $X
+      # indexOf-based allowlist: `if (ALLOWED.indexOf(x) === -1) throw;` (the
+      # pre-`includes` spelling of the same membership guard) and its
+      # positive-branch `!== -1` mirror. Both restrict the value to a member
+      # of the fixed ALLOWED array before it reaches the command text.
+      - by-side-effect: false
+        patterns:
+          - pattern-inside: |
+              if ($ALLOWED.indexOf($X) === -1) {
+                ...
+              }
+              ...
+          - pattern: $X
+      - by-side-effect: false
+        patterns:
+          - pattern-inside: |
+              if ($ALLOWED.indexOf($X) !== -1) {
+                ...
+              }
+          - pattern: $X
+      # Regex character-class allowlist guard: `/^[...]+$/.test(x)` (or `*`
+      # in place of `+`) anchored at both ends means the ENTIRE string must
+      # consist solely of characters drawn from the bracketed class - no
+      # shell metacharacters or whitespace can be present in a passing value,
+      # so the guarded value is exactly as safe as an array/Set membership
+      # allowlist. Both the positive-branch (`if ($RE.test($X)) { ...$X... }`)
+      # and negative-branch-returns-early (`if (!$RE.test($X)) { ... }
+      # ...$X...`) forms are covered, mirroring the includes()/has() guards
+      # above. Deliberately narrow: the metavariable-regex requires the regex
+      # literal's own source text to be `^[` ... `]` (one-or-more times a
+      # non-`]` char) `+`/`*` `$`, optionally followed by flags, so an
+      # un-anchored or non-character-class regex (e.g. `/^[a-z]/` with no
+      # trailing `$`, or `/.*allowed.*/`) is NOT treated as a sanitizer.
+      - by-side-effect: false
+        patterns:
+          - pattern-inside: |
+              if ($RE.test($X)) {
+                ...
+              }
+          - pattern: $X
+          - metavariable-regex:
+              metavariable: $RE
+              regex: ^/\^\[[^\]]+\][+*]\$/[a-zA-Z]*$
+      - by-side-effect: false
+        patterns:
+          - pattern-inside: |
+              if (!$RE.test($X)) {
+                ...
+              }
+              ...
+          - pattern: $X
+          - metavariable-regex:
+              metavariable: $RE
+              regex: ^/\^\[[^\]]+\][+*]\$/[a-zA-Z]*$
+    pattern-propagators: &propagators
+      # `let cmd = "..."; cmd += $Y;` accumulation.
+      - pattern: $X += $Y
+        from: $Y
+        to: $X
+
+  - id: cmdi.ts.tainted-into-shell-spawn
+    languages: [typescript]
+    severity: ERROR
+    mode: taint
+    message: >-
+      A shell command string is built from untrusted input and passed as the
+      `-c` argument of a spawn/execFile call that explicitly launches
+      sh/bash, which runs it through a shell; the interpolated value is not
+      escaped (OS command injection). A plain spawn(bin, [args]) /
+      execFile(bin, [args]) argv-array call never hits this rule, because it
+      never invokes a shell in the first place.
+    pattern-sources: *sources
+    pattern-sinks:
+      # spawn("sh"|"bash", ["-c", cmd, ...], ...) / execFile(same shape).
+      # Requires a shell-name first argument and a literal "-c" as the first
+      # element of the argv array - that's what actually makes the call
+      # launch a shell instead of exec'ing a program directly. The shell name
+      # may be a bare basename ("sh", "bash") or an absolute path
+      # ("/bin/sh", "/usr/bin/bash"); the regex allows an optional leading
+      # path so the common /bin/sh and /bin/bash spellings are caught too,
+      # and also covers the dash/zsh POSIX shells.
+      - patterns:
+          - pattern-either:
+              - pattern: spawn($SHELL, ["-c", $CMD, ...], ...)
+              - pattern: execFile($SHELL, ["-c", $CMD, ...], ...)
+              - pattern: spawnSync($SHELL, ["-c", $CMD, ...], ...)
+              - pattern: execFileSync($SHELL, ["-c", $CMD, ...], ...)
+              - pattern: $CP.spawn($SHELL, ["-c", $CMD, ...], ...)
+              - pattern: $CP.execFile($SHELL, ["-c", $CMD, ...], ...)
+              - pattern: $CP.spawnSync($SHELL, ["-c", $CMD, ...], ...)
+              - pattern: $CP.execFileSync($SHELL, ["-c", $CMD, ...], ...)
+          - focus-metavariable: $CMD
+          - metavariable-regex:
+              metavariable: $SHELL
+              regex: ^["']([^"']*/)?(sh|bash|dash|zsh)["']$
+      # `{ shell: true }` option: spawn/execFile (and their *Sync twins) run
+      # their FIRST argument through a shell when the options object sets
+      # shell:true, exactly like exec/execSync do unconditionally. So the
+      # command-string first argument becomes an injectable sink whenever
+      # shell:true is present. Covers the two-arg (cmd + options) and
+      # three-arg (cmd + argv array + options) call shapes, bare and via a
+      # child_process./cp. receiver.
+      - patterns:
+          # Each shape ends with a trailing `, ...` so an optional callback
+          # argument after the options object (the very common
+          # `execFile(cmd, opts, cb)` / `spawn(cmd, opts, cb)` form) still
+          # matches; the trailing ellipsis also matches zero extra args, so
+          # the bare two-arg call is covered by the same pattern.
+          - pattern-either:
+              - pattern: "spawn($CMD, {..., shell: true, ...}, ...)"
+              - pattern: "spawn($CMD, [...], {..., shell: true, ...}, ...)"
+              - pattern: "spawnSync($CMD, {..., shell: true, ...}, ...)"
+              - pattern: "spawnSync($CMD, [...], {..., shell: true, ...}, ...)"
+              - pattern: "execFile($CMD, {..., shell: true, ...}, ...)"
+              - pattern: "execFile($CMD, [...], {..., shell: true, ...}, ...)"
+              - pattern: "execFileSync($CMD, {..., shell: true, ...}, ...)"
+              - pattern: "execFileSync($CMD, [...], {..., shell: true, ...}, ...)"
+              - pattern: "$CP.spawn($CMD, {..., shell: true, ...}, ...)"
+              - pattern: "$CP.spawn($CMD, [...], {..., shell: true, ...}, ...)"
+              - pattern: "$CP.spawnSync($CMD, {..., shell: true, ...}, ...)"
+              - pattern: "$CP.spawnSync($CMD, [...], {..., shell: true, ...}, ...)"
+              - pattern: "$CP.execFile($CMD, {..., shell: true, ...}, ...)"
+              - pattern: "$CP.execFile($CMD, [...], {..., shell: true, ...}, ...)"
+              - pattern: "$CP.execFileSync($CMD, {..., shell: true, ...}, ...)"
+              - pattern: "$CP.execFileSync($CMD, [...], {..., shell: true, ...}, ...)"
+          - focus-metavariable: $CMD
+    pattern-sanitizers: *sanitizers
+    pattern-propagators: *propagators

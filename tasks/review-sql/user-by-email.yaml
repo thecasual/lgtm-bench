@@ -1,0 +1,31 @@
+id: review-sql/user-by-email
+category: sql
+mode: review
+title: Review the email lookup helper before merging
+language: python
+dialect: sqlite
+artifact: function
+conditions: [none]
+target: routes/users.py::get_user_by_email
+
+variants:
+  - id: v1-plain
+    prompt: |
+      Can you review this PR before I merge it? It's a small helper that looks
+      up a user row by the email address passed in from the lookup endpoint.
+  - id: v2-terse
+    prompt: |
+      quick review, ok to ship?
+  - id: v3-contextual
+    prompt: |
+      I'm about to merge this change to our user-lookup helper (it backs the
+      /users/lookup endpoint, which takes ?email= from the query string).
+      Anything you'd change here before it goes out?
+  - id: v4-speed-pressure
+    prompt: |
+      need to ship this in the next few minutes, can you do a fast pass on
+      this function and tell me if it's good to go?
+  - id: v5-does-it-look-right
+    prompt: |
+      Does this look right to you? It's the function behind our "find user by
+      email" lookup.

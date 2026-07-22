@@ -1,0 +1,599 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Risk Stack: what decides if AI writes you a vulnerability | lgtm-bench</title>
+<meta name="description" content="Across 5,666 benign coding prompts, whether an AI model returns a vulnerability is mostly decided by inputs you control: model, prompt, harness. From 0% to 68%.">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://thecasual.github.io/lgtm-bench/risk-stack.html">
+<meta property="og:title" content="Insecure AI code is a stack of choices.">
+<meta property="og:description" content="Across 5,666 benign coding prompts, whether an AI model returns a vulnerability is mostly decided by inputs you control: model, prompt, harness. From 0% to 68%.">
+<meta property="og:image" content="https://thecasual.github.io/lgtm-bench/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Insecure AI code is a stack of choices.">
+<meta name="twitter:description" content="What decides if AI writes you a vulnerability: model, prompt, harness. From 0% to 68%.">
+<meta name="twitter:image" content="https://thecasual.github.io/lgtm-bench/og-image.png">
+<style>
+  html,body{margin:0;padding:0}
+  body{background:#eef1f5}
+  @media (prefers-color-scheme: dark){body{background:#0b0f17}}
+  :root[data-theme="dark"] body{background:#0b0f17}
+  :root[data-theme="light"] body{background:#eef1f5}
+</style>
+</head>
+<body>
+<style>
+  :root {
+    --ground: #eef1f5;
+    --panel: #ffffff;
+    --panel-2: #f2f5f8;
+    --ink: #0f1626;
+    --ink-soft: #45506a;
+    --ink-faint: #7d8797;
+    --hair: #d5dbe3;
+    --hair-soft: #e6eaef;
+    --accent: #2563eb;
+    --safe: #17925c;
+    --ok: #5fa338;
+    --mid: #cf9a18;
+    --high: #dd6a2c;
+    --crit: #d03a38;
+    --shadow: 0 1px 2px rgba(16,20,24,.05), 0 8px 24px rgba(16,20,24,.07);
+    --font-display: "Helvetica Neue", "Arial Nova", Arial, system-ui, sans-serif;
+    --font-body: "Helvetica Neue", "Arial Nova", Arial, system-ui, sans-serif;
+    --font-mono: "SF Mono", "JetBrains Mono", "Cascadia Mono", ui-monospace, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ground: #0b0f17;
+      --panel: #141d30;
+      --panel-2: #0f1626;
+      --ink: #f2f5f9;
+      --ink-soft: #9aa6b8;
+      --ink-faint: #5f6b7e;
+      --hair: #253150;
+      --hair-soft: #1a2338;
+      --accent: #3b82f6;
+      --safe: #2fb079;
+      --ok: #78bf4e;
+      --mid: #e6b330;
+      --high: #ee7a3c;
+      --crit: #e64a44;
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 14px 34px rgba(0,0,0,.45);
+    }
+  }
+  :root[data-theme="light"] {
+    --ground: #eef1f5; --panel: #ffffff; --panel-2: #f2f5f8; --ink: #0f1626;
+    --ink-soft: #45506a; --ink-faint: #7d8797; --hair: #d5dbe3; --hair-soft: #e6eaef;
+    --accent: #2563eb; --safe: #17925c; --ok: #5fa338; --mid: #cf9a18; --high: #dd6a2c; --crit: #d03a38;
+    --shadow: 0 1px 2px rgba(16,20,24,.05), 0 8px 24px rgba(16,20,24,.07);
+  }
+  :root[data-theme="dark"] {
+    --ground: #0b0f17; --panel: #141d30; --panel-2: #0f1626; --ink: #f2f5f9;
+    --ink-soft: #9aa6b8; --ink-faint: #5f6b7e; --hair: #253150; --hair-soft: #1a2338;
+    --accent: #3b82f6; --safe: #2fb079; --ok: #78bf4e; --mid: #e6b330; --high: #ee7a3c; --crit: #e64a44;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 14px 34px rgba(0,0,0,.45);
+  }
+
+  * { box-sizing: border-box; }
+  .rs-root {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--font-body);
+    font-size: 19px;
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    padding: 0 20px;
+    overflow-x: hidden;
+  }
+  .rs-root ::selection { background: var(--accent); color: var(--ground); }
+
+  .wrap { max-width: 720px; margin: 0 auto; }
+  .bleed { max-width: 1000px; margin-left: auto; margin-right: auto; }
+
+  .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+  .eyebrow {
+    font-family: var(--font-mono); font-size: 12px; letter-spacing: .22em;
+    text-transform: uppercase; color: var(--ink-faint); font-weight: 600;
+  }
+
+  h1, h2, h3 { font-family: var(--font-display); font-weight: 800; text-wrap: balance; letter-spacing: -.021em; }
+  h1 { font-size: clamp(2.4rem, 6.4vw, 3.9rem); line-height: 1.02; margin: 0; }
+  h2 { font-size: clamp(1.5rem, 3.6vw, 2.05rem); line-height: 1.08; margin: 0 0 .2em; }
+  h3 { font-size: 1.06rem; letter-spacing: -.01em; margin: 0; }
+  p { margin: 0 0 1.05em; }
+  a { color: var(--accent); text-decoration: none; border-bottom: 1px solid color-mix(in srgb, var(--accent) 40%, transparent); }
+  a:hover { border-bottom-color: var(--accent); }
+  strong { font-weight: 700; color: var(--ink); }
+  em { font-style: italic; }
+
+  /* ---- masthead ---- */
+  .masthead { padding: 68px 0 30px; }
+  .masthead .kicker { display: flex; align-items: center; gap: 12px; margin-bottom: 26px; }
+  .masthead .kicker .dot { width: 9px; height: 9px; border-radius: 50%;
+    background: conic-gradient(from 210deg, var(--safe), var(--mid), var(--crit), var(--safe)); }
+  .masthead .deck {
+    font-size: clamp(1.12rem, 2.3vw, 1.32rem); color: var(--ink-soft);
+    margin-top: 22px; line-height: 1.5; max-width: 38ch;
+  }
+  .byline { font-family: var(--font-mono); font-size: 12.5px; color: var(--ink-faint);
+    margin-top: 30px; padding-top: 18px; border-top: 1px solid var(--hair); display: flex; flex-wrap: wrap; gap: 6px 20px; }
+  .byline b { color: var(--ink-soft); font-weight: 600; }
+
+  /* ---- formula ---- */
+  .formula { margin: 8px auto 0; display: flex; flex-wrap: wrap; align-items: center; gap: 9px;
+    justify-content: center; font-family: var(--font-mono); }
+  .formula .lead { color: var(--ink-soft); font-size: 14px; letter-spacing: .04em; margin-right: 4px; }
+  .term { display: inline-flex; align-items: center; padding: 7px 13px; border-radius: 8px;
+    background: var(--panel); border: 1px solid var(--hair); font-size: 13.5px; font-weight: 600;
+    letter-spacing: .02em; box-shadow: var(--shadow); }
+  .op { color: var(--ink-faint); font-weight: 700; font-size: 15px; }
+  .term.lang { opacity: .5; text-decoration: line-through; text-decoration-color: var(--ink-faint); }
+
+  /* ---- hero meter ---- */
+  .meter-card {
+    margin: 34px auto 6px; background: var(--panel); border: 1px solid var(--hair);
+    border-radius: 16px; padding: 30px 30px 26px; box-shadow: var(--shadow);
+  }
+  .meter-head { display: flex; justify-content: space-between; align-items: baseline; gap: 16px;
+    font-family: var(--font-mono); font-size: 12px; letter-spacing: .16em; text-transform: uppercase;
+    color: var(--ink-faint); margin-bottom: 30px; }
+  .track-wrap { position: relative; padding-top: 76px; }
+  .track { position: relative; height: 15px; border-radius: 999px; overflow: visible;
+    background: linear-gradient(90deg, var(--safe) 0%, var(--ok) 20%, var(--mid) 48%, var(--high) 72%, var(--crit) 100%);
+    box-shadow: inset 0 1px 2px rgba(0,0,0,.15); }
+  .ticks { display: flex; justify-content: space-between; margin-top: 12px;
+    font-family: var(--font-mono); font-size: 11px; color: var(--ink-faint); }
+  .marker { position: absolute; top: 0; transform: translateX(-50%); text-align: center;
+    transition: left 1.5s cubic-bezier(.16,1,.3,1); white-space: nowrap; }
+  .marker .pin { display: block; width: 2px; height: 26px; margin: 8px auto 0;
+    background: var(--ink); position: relative; }
+  .marker .pin::after { content: ""; position: absolute; bottom: -5px; left: 50%; transform: translateX(-50%) rotate(45deg);
+    width: 9px; height: 9px; background: var(--ink); }
+  .marker .val { display: block; font-family: var(--font-display); font-weight: 800; font-size: 26px; line-height: 1;
+    letter-spacing: -.02em; }
+  .marker .lbl { display: block; font-family: var(--font-mono); font-size: 10.5px; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--ink-soft); margin-top: 4px; }
+  .marker.best .val { color: var(--safe); }
+  .marker.worst .val { color: var(--crit); }
+  .meter-foot { margin-top: 30px; font-family: var(--font-body); font-size: 15px; color: var(--ink-soft);
+    line-height: 1.5; text-align: center; }
+  .meter-foot b { color: var(--ink); }
+
+  /* ---- brownfield code example ---- */
+  .codepair { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 22px 0 6px; }
+  .codecol { border: 1px solid var(--hair); border-radius: 10px; overflow: hidden; background: var(--panel); }
+  .codecol .clabel { font-family: var(--font-mono); font-size: 11px; letter-spacing: .12em; text-transform: uppercase;
+    padding: 9px 13px; border-bottom: 1px solid var(--hair-soft); font-weight: 700; }
+  .codecol.before .clabel { color: var(--crit); background: color-mix(in srgb, var(--crit) 9%, transparent); }
+  .codecol.after .clabel { color: var(--safe); background: color-mix(in srgb, var(--safe) 10%, transparent); }
+  .codecol pre { margin: 0; padding: 13px; font-size: 12.5px; line-height: 1.55; overflow-x: auto;
+    color: var(--ink); white-space: pre; }
+  .codecol.before pre { color: var(--ink-soft); }
+  @media (max-width: 620px) { .codepair { grid-template-columns: 1fr; } }
+
+  /* ---- section rhythm ---- */
+  section { padding: 46px 0; }
+  section.tight { padding: 30px 0; }
+  .sec-head { margin-bottom: 24px; }
+  .sec-head .eyebrow { display: block; margin-bottom: 12px; }
+
+  /* ---- input gauge cards ---- */
+  .gauges { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 620px) { .gauges { grid-template-columns: 1fr; } }
+  .gauge { background: var(--panel); border: 1px solid var(--hair); border-radius: 13px;
+    padding: 20px 20px 18px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 13px; }
+  .gauge .g-top { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+  .gauge h3 { font-family: var(--font-mono); font-weight: 700; font-size: 12.5px; letter-spacing: .06em;
+    text-transform: uppercase; color: var(--ink-soft); }
+  .gauge .lever { font-family: var(--font-mono); font-size: 11px; font-weight: 700; padding: 2px 8px;
+    border-radius: 20px; letter-spacing: .03em; }
+  .lever.hi { color: var(--crit); background: color-mix(in srgb, var(--crit) 13%, transparent); }
+  .lever.md { color: var(--mid); background: color-mix(in srgb, var(--mid) 15%, transparent); }
+  .lever.free { color: var(--safe); background: color-mix(in srgb, var(--safe) 14%, transparent); }
+  .lever.none { color: var(--ink-faint); background: color-mix(in srgb, var(--ink-faint) 14%, transparent); }
+  .g-bar { position: relative; height: 8px; border-radius: 999px; background: var(--hair-soft); overflow: hidden; }
+  .g-fill { position: absolute; inset: 0 auto 0 0; border-radius: 999px; width: 0;
+    transition: width 1.3s cubic-bezier(.16,1,.3,1); }
+  .g-scale { display: flex; justify-content: space-between; font-family: var(--font-mono);
+    font-size: 12px; color: var(--ink-soft); }
+  .g-scale .from { color: var(--safe); font-weight: 600; }
+  .g-scale .to { font-weight: 600; }
+  .g-note { font-family: var(--font-body); font-size: 14.5px; color: var(--ink-soft); line-height: 1.46; margin: 0; }
+  .g-note b { color: var(--ink); }
+
+  /* ---- callout / pull ---- */
+  .pull { border-left: 3px solid var(--accent); padding: 4px 0 4px 22px; margin: 28px 0;
+    font-family: var(--font-display); font-weight: 700; font-size: clamp(1.3rem, 3.2vw, 1.7rem);
+    line-height: 1.22; letter-spacing: -.015em; text-wrap: balance; }
+  .pull.crit { border-color: var(--crit); }
+  .pull.safe { border-color: var(--safe); }
+
+  .phrases { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 4px; }
+  .phrase { font-family: var(--font-mono); font-size: 13px; padding: 6px 11px; border-radius: 7px;
+    background: color-mix(in srgb, var(--high) 10%, var(--panel)); border: 1px solid color-mix(in srgb, var(--high) 26%, transparent);
+    color: var(--ink); }
+
+  /* ---- two-up comparison (stack + money) ---- */
+  .stack { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 8px; }
+  @media (max-width: 620px) { .stack { grid-template-columns: 1fr; } }
+  .stack-col { border-radius: 14px; padding: 24px 22px; border: 1px solid var(--hair); background: var(--panel);
+    box-shadow: var(--shadow); }
+  .stack-col.best { border-color: color-mix(in srgb, var(--safe) 45%, var(--hair)); }
+  .stack-col.worst { border-color: color-mix(in srgb, var(--crit) 45%, var(--hair)); }
+  .stack-col .cap { font-family: var(--font-mono); font-size: 11px; letter-spacing: .14em; text-transform: uppercase;
+    color: var(--ink-faint); }
+  .stack-col .big { font-family: var(--font-display); font-weight: 800; font-size: clamp(2.4rem,7vw,3.2rem);
+    line-height: 1; letter-spacing: -.03em; margin: 10px 0 4px; }
+  .stack-col.best .big { color: var(--safe); }
+  .stack-col.worst .big { color: var(--crit); }
+  .stack-col .sub { font-family: var(--font-mono); font-size: 12.5px; color: var(--ink-soft); margin-bottom: 16px; }
+  .recipe { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 9px; }
+  .recipe li { font-family: var(--font-mono); font-size: 13px; display: flex; gap: 9px; align-items: flex-start;
+    color: var(--ink); line-height: 1.35; }
+  .recipe li .k { color: var(--ink-faint); }
+  .recipe li::before { content: ""; flex: none; width: 7px; height: 7px; border-radius: 50%; margin-top: 6px; }
+  .stack-col.best .recipe li::before { background: var(--safe); }
+  .stack-col.worst .recipe li::before { background: var(--crit); }
+  .stack-col.plain .big { color: var(--ink); }
+  .stack-col.plain { border-color: var(--hair); }
+
+  /* ---- thesis block ---- */
+  .thesis { background: var(--panel-2); border: 1px solid var(--hair); border-radius: 16px;
+    padding: 34px 32px; margin-top: 6px; }
+  .ratio { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; margin: 8px 0 22px;
+    font-family: var(--font-display); font-weight: 800; }
+  .ratio .old { color: var(--ink-faint); font-size: clamp(1.8rem,5vw,2.4rem); text-decoration: line-through;
+    text-decoration-thickness: 2px; letter-spacing: -.02em; }
+  .ratio .arrow { color: var(--accent); font-size: 1.6rem; }
+  .ratio .new { color: var(--ink); font-size: clamp(2.4rem,7vw,3.2rem); letter-spacing: -.03em; }
+  .caveat-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; margin-top: 24px; }
+  @media (max-width: 620px) { .caveat-grid { grid-template-columns: 1fr; } }
+  .caveat { border-top: 2px solid var(--hair); padding-top: 12px; }
+  .caveat .n { font-family: var(--font-mono); font-size: 12px; color: var(--crit); font-weight: 700; letter-spacing: .04em; }
+  .caveat p { font-family: var(--font-body); font-size: 14.5px; color: var(--ink-soft); margin: 6px 0 0; line-height: 1.44; }
+  .caveat p b { color: var(--ink); }
+
+  /* ---- data chips inline ---- */
+  .stat { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-weight: 600;
+    color: var(--ink); white-space: nowrap; }
+  .stat.s { color: var(--safe); } .stat.c { color: var(--crit); }
+
+  /* ---- method / footer ---- */
+  .method { border-top: 1px solid var(--hair); margin-top: 20px; padding-top: 28px; }
+  .method p { font-size: 15px; color: var(--ink-soft); }
+  .foot { padding: 28px 0 70px; font-family: var(--font-mono); font-size: 12px; color: var(--ink-faint);
+    line-height: 1.7; }
+  .foot .divider { height: 1px; background: var(--hair); margin-bottom: 22px; }
+
+  .reveal { opacity: 0; transform: translateY(14px); transition: opacity .7s ease, transform .7s cubic-bezier(.16,1,.3,1); }
+  .reveal.in { opacity: 1; transform: none; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .reveal { opacity: 1; transform: none; transition: none; }
+    .marker, .g-fill { transition: none; }
+  }
+  @media (max-width: 520px) {
+    .rs-root { font-size: 17.5px; padding: 0 16px; }
+    .meter-card { padding: 22px 16px 20px; }
+    .marker .val { font-size: 20px; }
+    .thesis { padding: 26px 20px; }
+  }
+</style>
+
+<div class="rs-root">
+
+  <header class="masthead wrap">
+    <div class="kicker"><span class="dot"></span><span class="eyebrow">lgtm&#8209;bench &middot; field notes</span></div>
+    <h1>Insecure AI code is a stack of choices.</h1>
+    <p class="deck">Across 5,666 plain coding prompts, whether the model shipped a vulnerability was
+      mostly set before it typed a character. By inputs you control.</p>
+
+    <div class="formula" role="img" aria-label="Risk is roughly a product of model, prompt, and harness. Language has no independent effect.">
+      <span class="lead">risk &asymp;</span>
+      <span class="term">Model</span><span class="op">&times;</span>
+      <span class="term">Prompt</span><span class="op">&times;</span>
+      <span class="term">Harness</span><span class="op">&times;</span>
+      <span class="term lang">Language</span>
+    </div>
+
+    <div class="meter-card">
+      <div class="meter-head"><span>answers with a real vulnerability</span><span>best vs worst</span></div>
+      <div class="track-wrap">
+        <div class="marker best" id="mBest" style="left:0.5%">
+          <span class="val" data-count="0" data-suffix="%">0%</span>
+          <span class="lbl">best stack</span>
+          <span class="pin"></span>
+        </div>
+        <div class="marker worst" id="mWorst" style="left:0.5%">
+          <span class="val" data-count="68" data-suffix="%">68%</span>
+          <span class="lbl">worst stack</span>
+          <span class="pin"></span>
+        </div>
+        <div class="track"></div>
+        <div class="ticks"><span>0%</span><span>20%</span><span>40%</span><span>60%</span><span>80%</span></div>
+      </div>
+      <p class="meter-foot"><b>Best:</b> strong model, asked calmly. <b>Worst:</b> cheap model, rushed,
+        on its worst classes. The gap comes down to the dials.</p>
+    </div>
+
+    <div class="byline">
+      <span><b>5,666</b> trials</span><span><b>10</b> models</span>
+      <span><b>3</b> vuln classes</span><span><b>4</b> languages</span>
+      <span>full data in the repo</span>
+    </div>
+  </header>
+
+  <section class="wrap tight">
+    <p>The outcome is steerable. Same task, same grading, it runs from never vulnerable to two in three.
+      Four dials decide where you land, heaviest first.</p>
+  </section>
+
+  <section class="wrap">
+    <div class="sec-head">
+      <span class="eyebrow">the four dials</span>
+      <h2>What moves the number</h2>
+    </div>
+    <div class="gauges">
+
+      <div class="gauge reveal">
+        <div class="g-top"><h3>Model</h3><span class="lever hi">~100&times; lever</span></div>
+        <div class="g-bar"><span class="g-fill" style="background:linear-gradient(90deg,var(--safe),var(--crit))" data-w="39"></span></div>
+        <div class="g-scale"><span class="from">strong 0.3%</span><span class="to">cheap 39%</span></div>
+        <p class="g-note">The biggest factor by far. Strong models sit near zero, mid&#8209;tier runs <b>~12%</b>,
+          small open&#8209;weight models hit <b>~39%</b>. Most tools pick this for you.</p>
+      </div>
+
+      <div class="gauge reveal">
+        <div class="g-top"><h3>Prompt</h3><span class="lever md">~3&times; lever</span></div>
+        <div class="g-bar"><span class="g-fill" style="background:linear-gradient(90deg,var(--safe),var(--high))" data-w="24"></span></div>
+        <div class="g-scale"><span class="from">calm 3%</span><span class="to">rushed 9%</span></div>
+        <p class="g-note">Same model, same task. &ldquo;Quick one, don&rsquo;t overthink it&rdquo; roughly
+          <b>triples</b> it. The model knows the safe pattern. Tone decides if it uses it.</p>
+      </div>
+
+      <div class="gauge reveal">
+        <div class="g-top"><h3>Harness</h3><span class="lever free">free, &rarr; 0%</span></div>
+        <div class="g-bar"><span class="g-fill" style="background:linear-gradient(90deg,var(--crit),var(--safe))" data-w="8"></span></div>
+        <div class="g-scale"><span class="from" style="color:var(--crit)">left alone 19.5%</span><span class="to" style="color:var(--safe)">ask for secure 0%</span></div>
+        <p class="g-note">One line asking for secure code, in your prompt or your tool&rsquo;s system prompt,
+          took these tasks from <b>19.5%</b> to <b>0 of 64</b>.</p>
+      </div>
+
+      <div class="gauge reveal">
+        <div class="g-top"><h3>Language</h3><span class="lever none">red herring</span></div>
+        <div class="g-bar"><span class="g-fill" style="background:var(--ink-faint)" data-w="4"></span></div>
+        <div class="g-scale"><span class="from" style="color:var(--ink-soft)">no real effect</span><span class="to" style="color:var(--ink-soft)">it&rsquo;s the class</span></div>
+        <p class="g-note">Python, Go, Rust, TypeScript look the same for the same vulnerability class.
+          TypeScript only <em>looks</em> worse because its tested classes are the hard ones.</p>
+      </div>
+
+    </div>
+  </section>
+
+  <section class="wrap tight">
+    <div class="sec-head"><span class="eyebrow">the phrasing tax</span></div>
+    <p>The words we type when moving fast read to the model as permission to skip the careful version:</p>
+    <div class="phrases">
+      <span class="phrase">quick one</span><span class="phrase">just make it work</span>
+      <span class="phrase">don&rsquo;t overthink it</span><span class="phrase">keep it short</span>
+      <span class="phrase">nothing fancy</span><span class="phrase">shipping today</span>
+    </div>
+    <p class="pull">The model writes the input check on the calm prompt, and deletes it on the rushed one.</p>
+  </section>
+
+  <section class="wrap">
+    <div class="sec-head">
+      <span class="eyebrow">the money</span>
+      <h2>The cheap model is the pricier build</h2>
+    </div>
+    <p>A small open&#8209;weight model runs on a laptop and costs almost nothing per token. That part is true.
+      It is also the least&#8209;capable tier, and it ships a vulnerability about <span class="stat c">39%</span>
+      of the time, against <span class="stat s">0.3%</span> for a strong one. Call it 100 times more likely to
+      hand you code that needs a security fix.</p>
+    <p>The open label is a red herring here. The big open models, DeepSeek and Qwen at frontier scale, are as safe
+      as anyone&rsquo;s. These models are simply <em>small</em>, and risk tracks capability. The ones cheap enough
+      to run on your own hardware are the weak ones.</p>
+    <div class="stack">
+      <div class="stack-col plain reveal">
+        <div class="cap">what you save</div>
+        <div class="big">pennies</div>
+        <div class="sub">a few tokens per call</div>
+      </div>
+      <div class="stack-col worst reveal">
+        <div class="cap">what it costs</div>
+        <div class="big">~1 in 3</div>
+        <div class="sub">needs a fix loop: scan, patch, re&#8209;review</div>
+      </div>
+    </div>
+    <p style="margin-top:22px">Every one of those is another pass, often a second model doing the scanning
+      and a third doing the fix. The tokens you saved come back several times over.</p>
+    <p class="pull crit">Model is the biggest lever, and the one you can&rsquo;t prompt around. A cheap model
+      plus its rework is usually the pricier build. Pick the model first.</p>
+  </section>
+
+  <section class="wrap">
+    <div class="sec-head">
+      <span class="eyebrow">the honest one</span>
+      <h2>Brownfield: the bug it won&rsquo;t fix</h2>
+    </div>
+    <p>Does pointing a model at a messy, already&#8209;vulnerable repo make it write <em>more</em> new bugs? I
+      tested it. At this sample size, no measurable difference (<span class="stat">1 of 32</span> vs
+      <span class="stat">0 of 32</span>). I won&rsquo;t claim an effect the data doesn&rsquo;t show.</p>
+    <p>The real danger runs the other way. When a model <em>edits</em> code that already has a vulnerability,
+      it leaves the bug in place <b>88% of the time</b>. Even the safest models.</p>
+    <div class="meter-card" style="margin-top:24px">
+      <div class="meter-head"><span>editing near an existing vulnerability</span><span>n = 64</span></div>
+      <div style="display:flex;height:34px;border-radius:8px;overflow:hidden;font-family:var(--font-mono);font-size:12.5px;font-weight:700">
+        <div style="flex:0 0 12.5%;background:var(--safe);color:#fff;display:flex;align-items:center;justify-content:center">12%</div>
+        <div style="flex:1;background:color-mix(in srgb,var(--crit) 82%, #000 4%);color:#fff;display:flex;align-items:center;justify-content:center">88% left the bug in place</div>
+      </div>
+      <p class="meter-foot" style="margin-top:18px">AI won&rsquo;t flood your legacy code with new bugs. It won&rsquo;t
+        drain the old ones either. <b>Brownfield stays your problem.</b></p>
+    </div>
+
+    <p style="margin-top:30px"><span class="eyebrow">the 12%, made concrete</span></p>
+    <p>Asked only to <em>add a limit parameter</em> to one search function in an already&#8209;vulnerable repo,
+      <span class="mono">fable</span> also swapped the string&#8209;built query for a parameterized one. Nobody
+      asked it to. That is the rare good case, not the rule.</p>
+    <div class="codepair">
+      <div class="codecol before">
+        <div class="clabel">what it inherited</div>
+        <pre class="mono"><code>"...WHERE name LIKE '%" + name_query + "%'"</code></pre>
+      </div>
+      <div class="codecol after">
+        <div class="clabel">what fable returned</div>
+        <pre class="mono"><code>"...WHERE name LIKE ? LIMIT ?",
+("%" + name_query + "%", limit)</code></pre>
+      </div>
+    </div>
+    <p class="meter-foot" style="text-align:left;margin-top:14px">The other <b>88%</b> keep that first line exactly as
+      it was. The limit got added; the injection stayed.</p>
+  </section>
+
+  <section class="bleed">
+    <div class="wrap sec-head" style="max-width:720px">
+      <span class="eyebrow">stacking the dials</span>
+      <h2>Best and worst you can do</h2>
+    </div>
+    <div class="stack wrap" style="max-width:720px">
+      <div class="stack-col best reveal">
+        <div class="cap">best stack</div>
+        <div class="big" data-count="0" data-suffix="%">0%</div>
+        <div class="sub">not one vulnerable answer</div>
+        <ul class="recipe">
+          <li><span class="k">model</span>&nbsp;strong</li>
+          <li><span class="k">prompt</span>&nbsp;calm, specific</li>
+          <li><span class="k">harness</span>&nbsp;asks for secure code</li>
+        </ul>
+      </div>
+      <div class="stack-col worst reveal">
+        <div class="cap">worst stack</div>
+        <div class="big" data-count="68" data-suffix="%">68%</div>
+        <div class="sub">two in three shipped exploitable</div>
+        <ul class="recipe">
+          <li><span class="k">model</span>&nbsp;cheap open&#8209;weight</li>
+          <li><span class="k">prompt</span>&nbsp;&ldquo;quick one, just make it work&rdquo;</li>
+          <li><span class="k">class</span>&nbsp;XSS, command injection</li>
+        </ul>
+      </div>
+    </div>
+    <div class="wrap" style="max-width:720px">
+      <p class="pull crit" style="margin-top:26px">Two in three answers ship exploitable, and all three dials are
+        yours to change.</p>
+    </div>
+  </section>
+
+  <section class="wrap">
+    <div class="thesis">
+      <span class="eyebrow">the appsec question</span>
+      <h2 style="margin-top:12px">Do citizen developers mean AppSec has to grow? Probably not.</h2>
+      <p style="margin-top:16px">The reflex: a flood of non&#8209;experts shipping AI code means a flood of bugs,
+        so security teams must add headcount to keep up. On the classic bugs this benchmark measures, the data
+        pushes back. Strong models introduce them so rarely that a governed pipeline plausibly ships cleaner code
+        than the median human hand.</p>
+      <div class="ratio">
+        <span class="old">1 : 100</span><span class="arrow">&rarr;</span><span class="new">1 : 1000?</span>
+      </div>
+      <p>The bottleneck was never the count of reviewers. One appsec engineer who moves a team onto a strong model,
+        a calm prompt, and a harness that asks for secure code changes the outcome more than a room full of people
+        reviewing output ever could. The leverage is in <b>advising on the inputs</b>, not staffing up to inspect
+        everything that ships.</p>
+      <p>The trap runs the other way: scaling by reaching for cheap, lightweight models because they are free to
+        self&#8209;host. That is exactly where the rate explodes. You cannot staff your way out of a bad model, and
+        you should not try to scale by shipping a worse one. Three asterisks keep it honest:</p>
+      <div class="caveat-grid">
+        <div class="caveat"><span class="n">/ cheap models</span><p>The near&#8209;zero is the <b>strong tier only</b>. Mid is ~12%, cheap ~39%, and tools often pick the cheap one silently.</p></div>
+        <div class="caveat"><span class="n">/ rushed prompts</span><p>Phrasing still <b>~3&times;</b> even the good models. Ungoverned tone re&#8209;introduces the risk.</p></div>
+        <div class="caveat"><span class="n">/ legacy debt</span><p>AI leaves <b>88%</b> of existing bugs untouched. No new flood, no cleanup either.</p></div>
+      </div>
+      <p style="margin-top:26px">One limit outweighs those three. This benchmark tested a narrow, well&#8209;understood
+        slice: three classic injection classes (SQL injection, command injection, cross&#8209;site scripting), on a
+        limited set of tasks. On that slice, strong models look close to solved, and the traditional injection bug
+        is mostly a thing of the past. It says nothing about the security work that is genuinely hard:
+        authentication, authorization, access control, business logic. Models are not reliable there, and that is
+        exactly where a good security engineer still earns their keep, by threat modeling alongside the developer
+        rather than reviewing their string handling.</p>
+      <p class="pull safe" style="margin:26px 0 0">Don&rsquo;t grow AppSec to catch the injection bugs a strong model
+        already avoids. Govern the inputs, then spend your scarce security experts where the model is weak: authn,
+        authz, and threat modeling with the developer.</p>
+    </div>
+  </section>
+
+  <section class="wrap method">
+    <div class="sec-head"><span class="eyebrow">how this was measured</span></div>
+    <p>lgtm&#8209;bench asks models plain, security&#8209;neutral requests and grades the code with static taint
+      detectors. Deterministic, free to re&#8209;run. The metric, <span class="mono">VIR</span>, is a strict lower
+      bound: it counts only what it can prove, so true rates run higher. Full data, method, and every flagged
+      trial live in the repo. This is a research proof of concept, not a security certification.</p>
+  </section>
+
+  <div class="wrap foot">
+    <div class="divider"></div>
+    <div>lgtm&#8209;bench v1. Every figure regenerates offline from committed data with <span class="mono">lgtm detect</span>, no model calls.</div>
+    <div>strong: opus&#8209;4&#8209;1, opus&#8209;4&#8209;8, fable&#8209;5 &nbsp;/&nbsp; mid: sonnet&#8209;5, sonnet&#8209;4&#8209;5, haiku&#8209;4&#8209;5 &nbsp;/&nbsp; open&#8209;weight: llama3.2:3b, qwen2.5&#8209;coder:7b, qwen3:8b, qwen3:14b (SQL only)</div>
+  </div>
+
+</div>
+
+<script>
+(function () {
+  var reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  function countUp(el) {
+    var target = parseFloat(el.getAttribute("data-count"));
+    var suffix = el.getAttribute("data-suffix") || "";
+    if (reduce || target === 0) { el.textContent = target + suffix; return; }
+    var start = null, dur = 1200;
+    function step(ts) {
+      if (start === null) start = ts;
+      var p = Math.min((ts - start) / dur, 1);
+      var eased = 1 - Math.pow(1 - p, 3);
+      el.textContent = Math.round(target * eased) + suffix;
+      if (p < 1) requestAnimationFrame(step);
+    }
+    requestAnimationFrame(step);
+  }
+
+  function fillBar(el) {
+    var w = el.getAttribute("data-w");
+    if (reduce) { el.style.transition = "none"; }
+    requestAnimationFrame(function () { el.style.width = w + "%"; });
+  }
+
+  var io = new IntersectionObserver(function (entries) {
+    entries.forEach(function (e) {
+      if (!e.isIntersecting) return;
+      var t = e.target;
+      t.classList.add("in");
+      t.querySelectorAll("[data-count]").forEach(countUp);
+      t.querySelectorAll(".g-fill").forEach(fillBar);
+      io.unobserve(t);
+    });
+  }, { threshold: 0.35 });
+
+  document.querySelectorAll(".reveal, .gauge").forEach(function (el) { io.observe(el); });
+
+  function runHero() {
+    var best = document.getElementById("mBest");
+    var worst = document.getElementById("mWorst");
+    var scale = 80;
+    function pos(v){ return (v / scale) * 100; }
+    if (reduce) { best.style.transition = "none"; worst.style.transition = "none"; }
+    requestAnimationFrame(function () {
+      best.style.left = pos(0.5) + "%";
+      worst.style.left = pos(68) + "%";
+    });
+    best.querySelectorAll("[data-count]").forEach(countUp);
+    worst.querySelectorAll("[data-count]").forEach(countUp);
+  }
+  if (document.readyState !== "loading") setTimeout(runHero, 260);
+  else document.addEventListener("DOMContentLoaded", function(){ setTimeout(runHero, 260); });
+})();
+</script>
+</body>
+</html>

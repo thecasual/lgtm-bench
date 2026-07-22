@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Methodology &middot; lgtm-bench</title>
+<meta name="description" content="How lgtm-bench measures whether AI-written code is vulnerable: what VIR counts, how grading works, and why the numbers reproduce offline. A short, plain-language guide.">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://thecasual.github.io/lgtm-bench/methodology.html">
+<meta property="og:title" content="Methodology · lgtm-bench">
+<meta property="og:description" content="How lgtm-bench measures whether AI-written code is vulnerable: what VIR counts, how grading works, and why the numbers reproduce offline.">
+<meta property="og:image" content="https://thecasual.github.io/lgtm-bench/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://thecasual.github.io/lgtm-bench/og-image.png">
+<style>
+  html,body{margin:0;padding:0}
+  body{background:#eef1f5}
+  @media (prefers-color-scheme: dark){body{background:#0b0f17}}
+  :root[data-theme="dark"] body{background:#0b0f17}
+  :root[data-theme="light"] body{background:#eef1f5}
+</style>
+</head>
+<body>
+<style>
+  :root {
+    --ground: #eef1f5;
+    --panel: #ffffff;
+    --panel-2: #f2f5f8;
+    --ink: #0f1626;
+    --ink-soft: #45506a;
+    --ink-faint: #7d8797;
+    --hair: #d5dbe3;
+    --hair-soft: #e6eaef;
+    --accent: #2563eb;
+    --safe: #17925c;
+    --mid: #cf9a18;
+    --crit: #d03a38;
+    --shadow: 0 1px 2px rgba(16,20,24,.05), 0 8px 24px rgba(16,20,24,.07);
+    --font-display: "Helvetica Neue", "Arial Nova", Arial, system-ui, sans-serif;
+    --font-body: "Helvetica Neue", "Arial Nova", Arial, system-ui, sans-serif;
+    --font-mono: "SF Mono", "JetBrains Mono", "Cascadia Mono", ui-monospace, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ground: #0b0f17;
+      --panel: #141d30;
+      --panel-2: #0f1626;
+      --ink: #f2f5f9;
+      --ink-soft: #9aa6b8;
+      --ink-faint: #5f6b7e;
+      --hair: #253150;
+      --hair-soft: #1a2338;
+      --accent: #3b82f6;
+      --safe: #2fb079;
+      --mid: #e6b330;
+      --crit: #e64a44;
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 14px 34px rgba(0,0,0,.45);
+    }
+  }
+  :root[data-theme="light"] {
+    --ground: #eef1f5; --panel: #ffffff; --panel-2: #f2f5f8; --ink: #0f1626;
+    --ink-soft: #45506a; --ink-faint: #7d8797; --hair: #d5dbe3; --hair-soft: #e6eaef;
+    --accent: #2563eb; --safe: #17925c; --mid: #cf9a18; --crit: #d03a38;
+    --shadow: 0 1px 2px rgba(16,20,24,.05), 0 8px 24px rgba(16,20,24,.07);
+  }
+  :root[data-theme="dark"] {
+    --ground: #0b0f17; --panel: #141d30; --panel-2: #0f1626; --ink: #f2f5f9;
+    --ink-soft: #9aa6b8; --ink-faint: #5f6b7e; --hair: #253150; --hair-soft: #1a2338;
+    --accent: #3b82f6; --safe: #2fb079; --mid: #e6b330; --crit: #e64a44;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 14px 34px rgba(0,0,0,.45);
+  }
+
+  * { box-sizing: border-box; }
+  .root {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--font-body);
+    font-size: 19px;
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    padding: 0 20px;
+    overflow-x: hidden;
+  }
+  .root ::selection { background: var(--accent); color: var(--ground); }
+  .wrap { max-width: 720px; margin: 0 auto; }
+  .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+
+  .eyebrow {
+    font-family: var(--font-mono); font-size: 12px; letter-spacing: .22em;
+    text-transform: uppercase; color: var(--ink-faint); font-weight: 600;
+  }
+  h1, h2 { font-family: var(--font-display); font-weight: 800; text-wrap: balance; letter-spacing: -.021em; }
+  h1 { font-size: clamp(2.1rem, 5.4vw, 3.1rem); line-height: 1.04; margin: 0; }
+  h2 { font-size: clamp(1.35rem, 3.2vw, 1.7rem); line-height: 1.1; margin: 0 0 .35em; }
+  p { margin: 0 0 1.05em; }
+  a { color: var(--accent); text-decoration: none; border-bottom: 1px solid color-mix(in srgb, var(--accent) 40%, transparent); }
+  a:hover { border-bottom-color: var(--accent); }
+  strong { font-weight: 700; color: var(--ink); }
+  em { font-style: italic; }
+
+  .masthead { padding: 64px 0 26px; }
+  .masthead .kicker { display: flex; align-items: center; gap: 12px; margin-bottom: 24px; }
+  .masthead .kicker .dot { width: 9px; height: 9px; border-radius: 50%;
+    background: conic-gradient(from 210deg, var(--safe), var(--mid), var(--crit), var(--safe)); }
+  .masthead .deck {
+    font-size: clamp(1.08rem, 2.2vw, 1.28rem); color: var(--ink-soft);
+    margin-top: 20px; line-height: 1.5; max-width: 44ch;
+  }
+
+  section { padding: 30px 0; border-top: 1px solid var(--hair); }
+  section:first-of-type { border-top: 0; }
+  .sec-head .eyebrow { display: block; margin-bottom: 10px; }
+
+  ul.tight { list-style: none; margin: 0 0 1em; padding: 0; }
+  ul.tight li { position: relative; padding-left: 20px; margin-bottom: .5em; line-height: 1.5; }
+  ul.tight li::before { content: ""; position: absolute; left: 2px; top: .62em;
+    width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+
+  .card { background: var(--panel); border: 1px solid var(--hair); border-radius: 13px;
+    padding: 22px 24px; box-shadow: var(--shadow); margin: 6px 0 0; }
+  .card p:last-child { margin-bottom: 0; }
+
+  .pull { border-left: 3px solid var(--accent); padding: 4px 0 4px 20px; margin: 22px 0;
+    font-family: var(--font-display); font-weight: 700; font-size: clamp(1.15rem, 2.7vw, 1.42rem);
+    line-height: 1.24; letter-spacing: -.012em; text-wrap: balance; }
+  .pull.crit { border-color: var(--crit); }
+
+  .tbl-scroll { overflow-x: auto; margin: 4px 0 2px; -webkit-overflow-scrolling: touch; }
+  table { border-collapse: collapse; width: 100%; min-width: 460px; font-family: var(--font-mono);
+    font-size: 13px; }
+  th, td { text-align: left; padding: 9px 14px 9px 0; border-bottom: 1px solid var(--hair-soft); vertical-align: top; }
+  th { color: var(--ink-faint); text-transform: uppercase; letter-spacing: .1em; font-size: 11px; font-weight: 600; }
+  td b { color: var(--ink); font-weight: 700; }
+  .cls { color: var(--crit); font-weight: 700; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 7px; margin: 2px 0 4px; }
+  .chip { font-family: var(--font-mono); font-size: 12.5px; padding: 4px 10px; border-radius: 7px;
+    background: var(--panel-2); border: 1px solid var(--hair); color: var(--ink); white-space: nowrap; }
+  .chip .k { color: var(--ink-faint); }
+
+  code { font-family: var(--font-mono); font-size: .86em; background: var(--panel-2);
+    border: 1px solid var(--hair-soft); border-radius: 5px; padding: 1px 5px; }
+
+  .caveat { border-top: 2px solid var(--hair); padding-top: 12px; margin-top: 16px; }
+  .caveat .n { font-family: var(--font-mono); font-size: 12px; color: var(--crit); font-weight: 700; letter-spacing: .04em; }
+  .caveat p { font-size: 15.5px; color: var(--ink-soft); margin: 6px 0 0; line-height: 1.46; }
+  .caveat p b { color: var(--ink); }
+
+  .foot { padding: 26px 0 70px; margin-top: 8px; font-family: var(--font-mono);
+    font-size: 12px; color: var(--ink-faint); line-height: 1.7; border-top: 1px solid var(--hair); }
+  .foot .links { display: flex; flex-wrap: wrap; gap: 8px 20px; margin-bottom: 16px; padding-top: 22px; }
+  .foot a { border: 0; }
+
+  @media (max-width: 520px) {
+    .root { font-size: 17.5px; padding: 0 16px; }
+    .card { padding: 18px 18px; }
+  }
+</style>
+
+<div class="root">
+
+  <header class="masthead wrap">
+    <div class="kicker"><span class="dot"></span><span class="eyebrow">lgtm&#8209;bench &middot; methodology</span></div>
+    <h1>How we decide the code is vulnerable</h1>
+    <p class="deck">lgtm&#8209;bench asks models ordinary coding questions, then checks the answers for security bugs
+      with a static grader. This is the short version: what we count, how, and why you can trust the numbers.</p>
+  </header>
+
+  <section class="wrap">
+    <div class="sec-head"><span class="eyebrow">what it measures</span><h2>VIR, a strict lower bound</h2></div>
+    <p><b>VIR</b> (Vulnerability Introduction Rate) is the share of gradable answers that contain a
+      detectable vulnerability. It is graded by static taint detection, so a <em>secure</em> verdict only means
+      <em>no detector fired</em>, not proven safe. Anything the detectors miss stays uncounted, so <b>VIR always
+      runs at or below the true rate.</b> Read every number as a floor, never a ceiling.</p>
+  </section>
+
+  <section class="wrap">
+    <div class="sec-head"><span class="eyebrow">the task</span><h2>Benign prompts, no mention of security</h2></div>
+    <p>Every prompt is a plain, single&#8209;function coding request. None of them mention security, injection, or
+      sanitizing. We want to see what a model writes when nobody reminds it to be careful. Each task runs across:</p>
+    <ul class="tight">
+      <li><b>Three modes:</b> <em>generate</em> (write it), <em>edit</em> (change existing code), <em>review</em> (describe the flaws in prose).</li>
+      <li><b>Three conditions:</b> <em>none</em> (empty context), <em>clean&#8209;repo</em>, and <em>dirty&#8209;repo</em> (an already&#8209;vulnerable codebase nearby).</li>
+    </ul>
+    <p>Only <em>generate</em> mode feeds the headline VIR. Edit and review are reported separately so detection is
+      never confused with introduction.</p>
+  </section>
+
+  <section class="wrap">
+    <div class="sec-head"><span class="eyebrow">the surface</span><h2>Three bug classes, four languages</h2></div>
+    <div class="tbl-scroll">
+      <table>
+        <thead><tr><th>class</th><th>cwe</th><th>languages tested</th></tr></thead>
+        <tbody>
+          <tr><td><span class="cls">SQL injection</span></td><td>CWE&#8209;89</td><td>Python, Go, Rust, TypeScript</td></tr>
+          <tr><td><span class="cls">OS command injection</span></td><td>CWE&#8209;78</td><td>Python, TypeScript</td></tr>
+          <tr><td><span class="cls">Cross&#8209;site scripting</span></td><td>CWE&#8209;79</td><td>TypeScript</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="margin-top:14px">The full four&#8209;language matrix exists for SQL only. Go and Rust are SQL&#8209;only;
+      command injection and XSS were tested in Python and TypeScript.</p>
+  </section>
+
+  <section class="wrap">
+    <div class="sec-head"><span class="eyebrow">the models</span><h2>Ten in the run</h2></div>
+    <p class="mono" style="font-size:13px;color:var(--ink-soft);margin-bottom:12px">SIX CLAUDE</p>
+    <div class="chips">
+      <span class="chip">opus&#8209;4&#8209;8</span><span class="chip">opus&#8209;4&#8209;1</span><span class="chip">sonnet&#8209;5</span>
+      <span class="chip">sonnet&#8209;4&#8209;5</span><span class="chip">haiku&#8209;4&#8209;5</span><span class="chip">fable&#8209;5</span>
+    </div>
+    <p class="mono" style="font-size:13px;color:var(--ink-soft);margin:16px 0 12px">FOUR OPEN&#8209;WEIGHT, via Ollama</p>
+    <div class="chips">
+      <span class="chip">llama3.2:3b</span><span class="chip">qwen2.5&#8209;coder:7b</span>
+      <span class="chip">qwen3:8b</span><span class="chip">qwen3:14b <span class="k">SQL only</span></span>
+    </div>
+  </section>
+
+  <section class="wrap">
+    <div class="sec-head"><span class="eyebrow">how grading works</span><h2>Static taint, audited both ways</h2></div>
+    <p>Each answer is parsed, then run through versioned <em>detector packs</em> that trace whether user&#8209;controlled
+      input reaches a dangerous sink (a query, a shell call, an HTML output) without being parameterized or sanitized.
+      If anything survives, the trial is graded vulnerable.</p>
+    <p>The detectors were not written once and trusted. They were driven through repeated adversarial audits of real
+      model output: every flagged trial was hand&#8209;checked for <em>false positives</em>, injectable&#8209;shape
+      tasks were checked for <em>false negatives</em>, and every confirmed misgrade became a permanent regression test.
+      Checking both directions keeps the bound from being inflated by false alarms or hollowed out by misses.</p>
+    <div class="card">
+      <p style="margin:0;font-size:16px;color:var(--ink-soft)"><b>Maturity varies by pack.</b> Python SQL and the
+        Go/Rust SQL packs cleared a full population audit. The four newer cells (TypeScript SQL, both command&#8209;injection
+        packs, TypeScript XSS) had a narrower pilot audit of flagged trials only, so their numbers are an even more
+        conservative floor.</p>
+    </div>
+  </section>
+
+  <section class="wrap">
+    <div class="sec-head"><span class="eyebrow">why you can trust it</span><h2>Every number regenerates offline</h2></div>
+    <p>The raw model outputs are committed to the repo. Grading is a pure function of that data plus the committed
+      detectors: run <code>lgtm detect</code> and every figure reproduces with <b>no model calls and no cost.</b>
+      A rule change can never silently drift a published number, because each trial stamps the detector version that
+      graded it. Rates are reported with <b>Wilson 95% confidence intervals</b>, since per&#8209;cell samples are small.</p>
+    <p class="pull">If you doubt a verdict, re&#8209;grade it yourself from the committed outputs and check the interval.</p>
+  </section>
+
+  <section class="wrap">
+    <div class="sec-head"><span class="eyebrow">read before you cite</span><h2>Honest limits</h2></div>
+    <div class="caveat"><span class="n">/ it undercounts</span>
+      <p>Static detection misses real bugs. VIR is a <b>lower bound</b>, so the true rate is higher than any number here.</p></div>
+    <div class="caveat"><span class="n">/ small samples</span>
+      <p>Many category&#8209;by&#8209;model cells run at low trial counts. <b>Lean on the confidence intervals</b>, not the point estimate.</p></div>
+    <div class="caveat"><span class="n">/ composition bias</span>
+      <p>Pooled figures are trial&#8209;weighted, so whichever models ran the most trials dominate. A pooled VIR is
+      <b>not a balanced cross&#8209;model average</b>; read it next to the equal&#8209;weight figure.</p></div>
+    <p style="margin-top:20px">One more: excluding invalid answers (a refusal, a clarifying question, prose instead of code)
+      from the denominator is a directional bias. A model that stalls on the riskiest prompts can look safer on headline VIR
+      than one that always answers with code. These numbers measure the model <em>plus</em> its harness and default sampling,
+      not a bare API. Treat this as a research proof of concept, not a security certification.</p>
+  </section>
+
+  <div class="wrap foot">
+    <div class="links">
+      <a href="./risk-stack.html">&larr; Risk Stack</a>
+      <a href="https://github.com/thecasual/lgtm-bench/blob/main/RESULTS.md">The numbers</a>
+      <a href="https://github.com/thecasual/lgtm-bench">Source</a>
+    </div>
+    <div>Sam Wallace &nbsp;/&nbsp; lgtm&#8209;bench v1</div>
+    <div>Every figure regenerates offline from committed data with <span class="mono">lgtm detect</span>, no model calls.</div>
+  </div>
+
+</div>
+</body>
+</html>

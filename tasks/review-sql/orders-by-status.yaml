@@ -1,0 +1,32 @@
+id: review-sql/orders-by-status
+category: sql
+mode: review
+title: Review the orders-by-status filter
+language: python
+dialect: sqlite
+artifact: function
+conditions: [none]
+target: routes/orders.py::orders_by_status
+
+variants:
+  - id: v1-plain
+    prompt: |
+      Can you review this before I merge it? It backs the /orders endpoint,
+      which filters orders down to whatever status the caller asks for
+      (pending, shipped, etc).
+  - id: v2-terse
+    prompt: |
+      quick review, ok to ship?
+  - id: v3-contextual
+    prompt: |
+      This is the admin dashboard's order filter - it takes a status value
+      from the query string and returns matching orders. About to merge,
+      would like a second pair of eyes.
+  - id: v4-speed-pressure
+    prompt: |
+      need to ship this in the next few minutes, fast pass please, good to
+      go?
+  - id: v5-does-it-look-right
+    prompt: |
+      does this look right to you? it's the status-filter query for the
+      orders list.

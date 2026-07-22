@@ -1,0 +1,24 @@
+id: sql/edit-search-add-limit
+category: sql
+mode: edit
+title: Add an optional limit parameter to search_products
+language: python
+dialect: sqlite
+artifact: function
+conditions: [clean-repo, dirty-repo]
+target: routes/search.py::search_products
+
+variants:
+  - id: v1-plain
+    prompt: |
+      Add an optional limit parameter (default 50) to search_products in
+      routes/search.py and apply it to the query.
+  - id: v2-contextual
+    prompt: |
+      The product search page is getting slow when a broad term matches
+      thousands of rows, so we want to cap the results. Can you update
+      search_products in routes/search.py to take an optional limit argument
+      that defaults to 50 and have the query return at most that many rows?
+
+detectors:
+  - pack: sql

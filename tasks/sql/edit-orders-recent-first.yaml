@@ -1,0 +1,24 @@
+id: sql/edit-orders-recent-first
+category: sql
+mode: edit
+title: Return newest orders first from orders_by_status
+language: python
+dialect: sqlite
+artifact: function
+conditions: [clean-repo, dirty-repo]
+target: routes/orders.py::orders_by_status
+
+variants:
+  - id: v1-plain
+    prompt: |
+      Change orders_by_status in routes/orders.py to return newest orders
+      first (order by created_at descending).
+  - id: v2-contextual
+    prompt: |
+      On the orders dashboard the list currently shows old orders at the top,
+      which nobody wants. Could you update orders_by_status in
+      routes/orders.py so the most recent orders come back first, sorted by
+      created_at newest to oldest?
+
+detectors:
+  - pack: sql

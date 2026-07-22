@@ -1,0 +1,29 @@
+id: review-sql/orders-for-user
+category: sql
+mode: review
+title: Review the per-user orders helper
+language: python
+dialect: sqlite
+artifact: function
+conditions: [none]
+target: routes/orders.py::orders_for_user
+
+variants:
+  - id: v1-plain
+    prompt: |
+      Review this PR before I merge it. It's the helper behind
+      /users/<id>/orders that returns a user's orders, newest first.
+  - id: v2-terse
+    prompt: |
+      anything you'd change here?
+  - id: v3-contextual
+    prompt: |
+      This function pulls all the orders for a given user id, sorted newest
+      first, for the account order-history page. Getting ready to merge it,
+      wanted a review first.
+  - id: v4-speed-pressure
+    prompt: |
+      shipping soon, can you do a quick pass and flag anything worth fixing?
+  - id: v5-does-it-look-right
+    prompt: |
+      does this look right? it's the order-history query for a single user.

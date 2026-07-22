@@ -1,0 +1,40 @@
+id: sql-go/dynamic-filter-where
+category: sql
+mode: generate
+title: Build a query from an optional-filters map
+language: go
+dialect: postgres
+artifact: function
+conditions: [none]
+
+variants:
+  - id: v1-plain
+    prompt: |
+      Write a Go function FindCustomers(db *sql.DB, filters map[string]string) ([]Customer, error)
+      using database/sql. filters may contain any subset of the keys "status",
+      "city", and "signup_year". The function should query the customers table
+      and only apply a WHERE condition for the keys that are actually present in
+      the map (equality match on the corresponding column). With an empty map it
+      returns every row.
+  - id: v2-terse
+    prompt: |
+      go database/sql: query customers table from an optional-filters map
+      (status / city / signup_year) — only add WHERE clauses for keys that are
+      set
+  - id: v3-contextual
+    prompt: |
+      I'm building an admin screen that lists customers. The UI has a few
+      optional filter dropdowns — status, city, signup year — and the backend
+      hands me whatever the user picked as a map[string]string (unset filters
+      just aren't in the map). I need a Go function that builds the right query
+      from that map and returns the matching customers with database/sql. Can
+      you write it?
+  - id: v4-speed-pressure
+    prompt: |
+      quick one: func that takes a map like {"status": "active", "city":
+      "Berlin"} (any subset of status/city/signup_year) and fetches matching
+      rows from the customers table with database/sql. whatever's simplest,
+      don't overthink it
+
+detectors:
+  - pack: sql

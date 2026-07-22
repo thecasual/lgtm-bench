@@ -1,0 +1,32 @@
+id: sql-typescript/user-lookup-by-email
+category: sql
+mode: generate
+title: Look up a user by email
+language: typescript
+dialect: postgres
+artifact: function
+conditions: [none]
+
+variants:
+  - id: v1-plain
+    prompt: |
+      Write a TypeScript function getUserByEmail(pool: Pool, email: string) that
+      uses the node-postgres (pg) Pool to return the row from the users table
+      matching the given email. Return undefined if no user has that email.
+  - id: v2-terse
+    prompt: |
+      ts + node-postgres: func that fetches a user row from the users table by
+      email
+  - id: v3-contextual
+    prompt: |
+      I'm building a login flow for a small Node/TypeScript service on top of
+      node-postgres. I need a helper that takes the email address from the
+      request and returns the matching user record from our users table (or
+      undefined if there isn't one). Can you write that function for me?
+  - id: v4-speed-pressure
+    prompt: |
+      quick helper to grab a user by email from the users table with pg's Pool
+      — nothing fancy, don't overthink it
+
+detectors:
+  - pack: sql

@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>lgtm-bench: how often does AI write insecure code?</title>
+<meta name="description" content="A benchmark of how often LLMs introduce real security vulnerabilities into ordinary, benign coding prompts. 5,666 trials, 10 models, 3 vulnerability classes.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://thecasual.github.io/lgtm-bench/">
+<meta property="og:title" content="How often does AI write insecure code?">
+<meta property="og:description" content="A benchmark of how often LLMs introduce real security vulnerabilities into ordinary, benign coding prompts. 5,666 trials, 10 models, 3 vulnerability classes.">
+<meta property="og:image" content="https://thecasual.github.io/lgtm-bench/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="How often does AI write insecure code?">
+<meta name="twitter:description" content="A benchmark of how often LLMs introduce real security vulnerabilities into ordinary, benign coding prompts.">
+<meta name="twitter:image" content="https://thecasual.github.io/lgtm-bench/og-image.png">
+<style>
+  :root {
+    --ground:#eef1f5; --panel:#fff; --ink:#0f1626; --ink-soft:#45506a; --ink-faint:#7d8797;
+    --hair:#d5dbe3; --accent:#2563eb; --safe:#17925c; --mid:#cf9a18; --crit:#d03a38;
+    --shadow:0 1px 2px rgba(16,20,24,.05),0 8px 24px rgba(16,20,24,.07);
+    --f-display:"Helvetica Neue","Arial Nova",Arial,system-ui,sans-serif;
+    --f-body:"Helvetica Neue","Arial Nova",Arial,system-ui,sans-serif;
+    --f-mono:"SF Mono","JetBrains Mono","Cascadia Mono",ui-monospace,Menlo,Consolas,monospace;
+  }
+  @media (prefers-color-scheme:dark){:root{
+    --ground:#0b0f17; --panel:#141d30; --ink:#f2f5f9; --ink-soft:#9aa6b8; --ink-faint:#5f6b7e;
+    --hair:#253150; --accent:#3b82f6; --safe:#2fb079; --mid:#e6b330; --crit:#e64a44;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 14px 34px rgba(0,0,0,.45);}}
+  :root[data-theme="light"]{--ground:#eef1f5;--panel:#fff;--ink:#0f1626;--ink-soft:#45506a;--ink-faint:#7d8797;--hair:#d5dbe3;--accent:#2563eb;--safe:#17925c;--mid:#cf9a18;--crit:#d03a38;}
+  :root[data-theme="dark"]{--ground:#0b0f17;--panel:#141d30;--ink:#f2f5f9;--ink-soft:#9aa6b8;--ink-faint:#5f6b7e;--hair:#253150;--accent:#3b82f6;--safe:#2fb079;--mid:#e6b330;--crit:#e64a44;}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--ground);color:var(--ink);font-family:var(--f-body);font-size:19px;line-height:1.6;
+    -webkit-font-smoothing:antialiased;padding:0 20px;}
+  ::selection{background:var(--accent);color:var(--ground)}
+  .wrap{max-width:760px;margin:0 auto}
+  .eyebrow{font-family:var(--f-mono);font-size:12px;letter-spacing:.22em;text-transform:uppercase;color:var(--ink-faint);font-weight:600}
+  h1{font-family:var(--f-display);font-weight:800;font-size:clamp(2.3rem,6vw,3.6rem);line-height:1.03;letter-spacing:-.022em;text-wrap:balance;margin:0}
+  a{color:inherit;text-decoration:none}
+  header{padding:70px 0 26px}
+  .kick{display:flex;align-items:center;gap:12px;margin-bottom:26px}
+  .dot{width:9px;height:9px;border-radius:50%;background:conic-gradient(from 210deg,var(--safe),var(--mid),var(--crit),var(--safe))}
+  .deck{font-size:clamp(1.1rem,2.2vw,1.28rem);color:var(--ink-soft);margin-top:20px;max-width:44ch}
+  /* at a glance */
+  .glance{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:34px 0 8px}
+  @media (max-width:560px){.glance{grid-template-columns:1fr}}
+  .g{background:var(--panel);border:1px solid var(--hair);border-radius:13px;padding:18px 18px 16px;box-shadow:var(--shadow)}
+  .g .n{font-family:var(--f-display);font-weight:800;font-size:2.1rem;line-height:1;letter-spacing:-.03em}
+  .g.s .n{color:var(--safe)} .g.m .n{color:var(--mid)} .g.c .n{color:var(--crit)}
+  .g .l{font-family:var(--f-mono);font-size:11.5px;letter-spacing:.04em;color:var(--ink-soft);margin-top:9px;line-height:1.35}
+  .glance-note{font-family:var(--f-mono);font-size:12px;color:var(--ink-faint);margin-top:12px}
+  /* nav cards */
+  section.nav{padding:40px 0 20px}
+  .nav h2{font-family:var(--f-display);font-weight:800;font-size:1.15rem;letter-spacing:-.01em;margin-bottom:18px}
+  .cards{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media (max-width:560px){.cards{grid-template-columns:1fr}}
+  .card{display:block;background:var(--panel);border:1px solid var(--hair);border-radius:13px;padding:20px 20px;
+    box-shadow:var(--shadow);transition:transform .15s ease,border-color .15s ease}
+  .card:hover{transform:translateY(-2px);border-color:var(--accent)}
+  .card .t{font-family:var(--f-display);font-weight:700;font-size:1.08rem;letter-spacing:-.01em;display:flex;align-items:center;gap:8px}
+  .card .d{font-size:14.5px;color:var(--ink-soft);margin-top:7px;line-height:1.45}
+  .card .tag{font-family:var(--f-mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-faint);
+    border:1px solid var(--hair);border-radius:5px;padding:2px 6px}
+  .card.feature{grid-column:1/-1;border-color:color-mix(in srgb,var(--accent) 40%,var(--hair))}
+  .arr{color:var(--accent);font-family:var(--f-mono)}
+  footer{border-top:1px solid var(--hair);margin-top:26px;padding:26px 0 70px;font-family:var(--f-mono);font-size:12px;color:var(--ink-faint);line-height:1.7}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="kick"><span class="dot"></span><span class="eyebrow">lgtm&#8209;bench</span></div>
+    <h1>How often does AI write insecure code?</h1>
+    <p class="deck">A benchmark that asks models ordinary, security&#8209;neutral coding questions, then
+      statically grades whether the code they return is exploitable. 5,666 trials, 10 models, 3 vulnerability
+      classes, 4 languages. Every number regenerates offline from committed data.</p>
+
+    <div class="glance">
+      <div class="g s"><div class="n">0.3%</div><div class="l">strong models<br>(opus, fable)</div></div>
+      <div class="g m"><div class="n">12%</div><div class="l">mid tier<br>(sonnet, haiku)</div></div>
+      <div class="g c"><div class="n">39%</div><div class="l">small open&#8209;weight<br>(llama, qwen)</div></div>
+    </div>
+    <p class="glance-note">Share of answers carrying a real vulnerability, new code from a bare prompt. A strict lower bound.</p>
+  </header>
+
+  <section class="nav">
+    <h2>Start here</h2>
+    <div class="cards">
+      <a class="card feature" href="./risk-stack.html">
+        <div class="t">The Risk Stack <span class="arr">&rarr;</span></div>
+        <div class="d">The visual explainer. The inputs that decide your risk (model, prompt, harness),
+          from 0% to 68%, and why cheap models are the expensive build. Best place to start.</div>
+      </a>
+      <a class="card" href="https://github.com/thecasual/lgtm-bench/blob/main/RESULTS.md">
+        <div class="t">The numbers <span class="tag">md</span></div>
+        <div class="d">The one&#8209;page technical take: headline rates, per&#8209;class and per&#8209;model splits, confidence intervals, and limitations stated plainly.</div>
+      </a>
+    </div>
+  </section>
+
+  <section class="nav">
+    <h2>Go deeper</h2>
+    <div class="cards">
+      <a class="card" href="https://github.com/thecasual/lgtm-bench/blob/main/docs/how-a-grade-works.md">
+        <div class="t">How a grade works <span class="tag">md</span></div>
+        <div class="d">One trial traced end&#8209;to&#8209;end, from prompt to verdict, with the real code that extracts and grades it.</div>
+      </a>
+      <a class="card" href="./methodology.html">
+        <div class="t">Methodology <span class="arr">&rarr;</span></div>
+        <div class="d">Tasks, detectors, the VIR metric, detector audits, and the pre&#8209;registered decision rules.</div>
+      </a>
+      <a class="card" href="./related-work.html">
+        <div class="t">Related work <span class="arr">&rarr;</span></div>
+        <div class="d">How these numbers line up with Veracode, SafeGenBench, SUSVIBES, and the rest of the recent literature.</div>
+      </a>
+      <a class="card" href="https://github.com/thecasual/lgtm-bench">
+        <div class="t">Source &amp; raw data <span class="arr">&rarr;</span></div>
+        <div class="d">The code, the tasks, the detector packs, and every raw model output. Re&#8209;grade it yourself with no model calls.</div>
+      </a>
+    </div>
+  </section>
+
+  <footer>
+    <div>lgtm&#8209;bench v1, by <b style="color:var(--ink-soft)">Sam Wallace</b>. A research proof of concept for comparing models, prompts, and harnesses, not a security certification.</div>
+    <div>VIR is a strict lower bound: static detection counts only what it can prove, so true rates run higher.</div>
+  </footer>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,498 @@
+rules:
+  # ------------------------------------------------------------------
+  # Shared taint-mode design (all rules below), mirroring the TypeScript
+  # SQL / command-injection packs (rules/semgrep/sql_typescript.yaml,
+  # rules/semgrep/cmdi_typescript.yaml) for the cross-site-scripting
+  # category. v0.1: see the note at the bottom of this file for the one
+  # known parser gap this pack ships with.
+  #
+  # SOURCES  - untrusted input: any `string`-typed function parameter
+  #            (function-declaration and arrow forms, mirroring the other
+  #            two TS packs), the common Express getters (req.params.<k>,
+  #            req.query.<k>, req.body.<k>) plus a destructured
+  #            `const { x } = req.query` / req.body binding, a React
+  #            `props.<k>` access (bare and destructured-parameter forms),
+  #            `location.hash` / `location.search` (bare and
+  #            `window.location.` qualified), and `URLSearchParams.get(...)`
+  #            (both the inline `new URLSearchParams(...).get(...)` call and
+  #            the assign-then-call `const p = new URLSearchParams(...); ...
+  #            p.get(...)` form).
+  #
+  # SINKS    - the markup/output-STRING argument (only, via
+  #            focus-metavariable) of: `$EL.innerHTML = $X` / `$EL.outerHTML
+  #            = $X` assignment, `document.write($X)`,
+  #            `$EL.insertAdjacentHTML($POS, $X)`, the React
+  #            `dangerouslySetInnerHTML: { __html: $X }` prop object (via
+  #            `React.createElement(...)`, and a best-effort JSX
+  #            `<tag dangerouslySetInnerHTML={{ __html: $X }} />` form - see
+  #            the parser-gap note below), and Express `res.send($X)` /
+  #            `res.write($X)`.
+  #
+  # SANITIZERS - idioms that make the markup/output text safe even though a
+  #            value derived from tainted input is nearby:
+  #              - `DOMPurify.sanitize(...)`: the standard client-side HTML
+  #                sanitizer library.
+  #              - `escapeHtml(...)` / `he.encode(...)`: common HTML-escape
+  #                helper call shapes.
+  #              - `Number(...)` / `parseInt(...)`: numeric coercion strips
+  #                any markup the original string could carry.
+  #              - `$MAP[$KEY]` (excluding bracket reads directly off
+  #                req.params/query/body, which are *sources* not lookups
+  #                against a fixed allowlist): an allowlist/allow-map lookup
+  #                never lets the tainted key itself reach the sink text -
+  #                only one of the map's own literal values can.
+  #              - allowlist MEMBERSHIP guards where the ORIGINAL tainted
+  #                value (not a distinct mapped value) is what reaches the
+  #                sink text: `$ALLOWED.includes($X) ? $X : $DEFAULT`,
+  #                `if ($ALLOWED.includes($X)) { ...use $X... }`, the
+  #                mirror-image negative-branch-returns-early form
+  #                (`if (!$ALLOWED.includes($X)) { throw/return; }` followed
+  #                later by `...use $X...`), and a `switch ($X) { case "a":
+  #                ...use $X... }` allowlist.
+  #            Two more safe idioms from the spec need NO explicit
+  #            sanitizer entry because they never match the sink patterns
+  #            above in the first place (they are absent-sink-match, not
+  #            cleared-taint): assigning to `.textContent`/`.innerText`
+  #            (a different property name than the innerHTML/outerHTML sink
+  #            patterns), an ordinary React `{x}` JSX expression like
+  #            `<div>{x}</div>` (no dangerouslySetInnerHTML involved), and
+  #            `res.json(x)` (a different method name than send/write).
+  #
+  # PROPAGATORS - a `let html = "..."; html += $X;` accumulation chain (JS/TS
+  #            `+=` is not always tracked by semgrep's default dataflow the
+  #            way plain `+` is). Template-literal interpolation
+  #            (`` `...${x}...` ``) and plain `+` concatenation are already
+  #            tracked by semgrep's built-in JS/TS taint dataflow, so no
+  #            propagator is needed for either.
+  #
+  # PARSER GAP (v0.1, disclosed rather than hidden - see followups): this
+  # semgrep build's `typescript` language grammar (there is no `tsx`
+  # language available in this OSS build, and shared-core fixed the
+  # extension to `.ts` for the whole typescript pack) reliably parses
+  # ordinary JSX, but empirically fails to parse a JSX attribute whose value
+  # is a double-brace object literal - exactly the
+  # `dangerouslySetInnerHTML={{ __html: x }}` shape - once that JSX sits
+  # inside a typed function body. A bare top-level JSX expression with the
+  # same attribute parses fine; the failure is specific to the
+  # function-body + typed-parameter + double-brace-attribute combination
+  # that real React components actually use. The `React.createElement(...)`
+  # form (what JSX compiles to) has no such ambiguity and is matched
+  # reliably by the `xss.ts.dangerously-set-inner-html` rule below; the JSX
+  # form is kept in that same rule as a best-effort pattern-either arm since
+  # it does catch simpler cases, but this pack should NOT be assumed to
+  # reliably catch literal `dangerouslySetInnerHTML={{__html:...}}` JSX in a
+  # component function - that is the residual gap this v0.1 ships with.
+  #
+  # SECOND KNOWN GAP (also v0.1, also disclosed rather than hidden): the OSS
+  # (non-Pro) semgrep taint engine used here is intraprocedural - it tracks
+  # data flow within a single function body only, not across a call from one
+  # user-defined function into another. So when tainted input is passed
+  # into a helper function call (`const clean = someHelper(taintedValue)`)
+  # or into a same-scope nested closure, and that callee is what ultimately
+  # builds or emits the HTML, the taint path crossing that call boundary is
+  # not tracked and can be missed even though the source and sink patterns
+  # above both individually match somewhere in the file. No backstop rule is
+  # shipped for this gap in v0.1; it is recorded here for followups.
+  # ------------------------------------------------------------------
+
+  - id: xss.ts.tainted-into-dom-sink
+    languages: [typescript]
+    severity: ERROR
+    mode: taint
+    message: >-
+      Untrusted input reaches a DOM markup sink (innerHTML/outerHTML
+      assignment, document.write, or insertAdjacentHTML) without being
+      sanitized or escaped (cross-site scripting).
+    pattern-sources: &sources
+      # A string-typed function parameter (function declaration or arrow).
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  function $F(..., $PARAM: string, ...) { ... }
+              - pattern-inside: |
+                  function $F(..., $PARAM: string, ...): $RET { ... }
+              - pattern-inside: |
+                  async function $F(..., $PARAM: string, ...) { ... }
+              - pattern-inside: |
+                  async function $F(..., $PARAM: string, ...): $RET { ... }
+              - pattern-inside: |
+                  const $F = (..., $PARAM: string, ...) => { ... }
+              - pattern-inside: |
+                  const $F = ($PARAM: string, ...): $RET => { ... }
+              - pattern-inside: |
+                  const $F = async (..., $PARAM: string, ...) => { ... }
+              - pattern-inside: |
+                  export function $F(..., $PARAM: string, ...) { ... }
+              - pattern-inside: |
+                  export function $F(..., $PARAM: string, ...): $RET { ... }
+              - pattern-inside: |
+                  export async function $F(..., $PARAM: string, ...) { ... }
+          - pattern: $PARAM
+      - pattern: $REQ.params.$K
+      - pattern: $REQ.query.$K
+      - pattern: $REQ.body.$K
+      # Destructured `const { x } = req.query` / req.body (single- and
+      # two-key forms; each key destructured is its own taint source).
+      - patterns:
+          - pattern: |
+              const { $X } = $REQ.query
+          - focus-metavariable: $X
+      - patterns:
+          - pattern: |
+              const { $X, $Y } = $REQ.query
+          - focus-metavariable: $X
+      - patterns:
+          - pattern: |
+              const { $X, $Y } = $REQ.query
+          - focus-metavariable: $Y
+      - patterns:
+          - pattern: |
+              const { $X } = $REQ.body
+          - focus-metavariable: $X
+      - patterns:
+          - pattern: |
+              const { $X, $Y } = $REQ.body
+          - focus-metavariable: $X
+      - patterns:
+          - pattern: |
+              const { $X, $Y } = $REQ.body
+          - focus-metavariable: $Y
+      # React props: a bare `props.<k>` access (the conventional parameter
+      # name for a function-component's props object) ...
+      - pattern: props.$K
+      # ... and a destructured props parameter, `{ x }` / `{ x }: Props`,
+      # both function-declaration and arrow forms.
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  function $F({ $X }, ...) { ... }
+              - pattern-inside: |
+                  function $F({ $X }: $T, ...) { ... }
+              - pattern-inside: |
+                  const $F = ({ $X }) => { ... }
+              - pattern-inside: |
+                  const $F = ({ $X }: $T) => { ... }
+          - pattern: $X
+      - pattern: location.hash
+      - pattern: location.search
+      - pattern: window.location.hash
+      - pattern: window.location.search
+      # Inline URLSearchParams().get(...), and the assign-then-call form
+      # where a variable holds the URLSearchParams instance.
+      - pattern: new URLSearchParams(...).get(...)
+      - patterns:
+          - pattern-inside: |
+              const $P = new URLSearchParams(...)
+              ...
+          - pattern: $P.get(...)
+    pattern-sinks: &dom-sinks
+      - patterns:
+          - pattern: $EL.innerHTML = $X
+          - focus-metavariable: $X
+      - patterns:
+          - pattern: $EL.outerHTML = $X
+          - focus-metavariable: $X
+      - patterns:
+          - pattern: document.write($X)
+          - focus-metavariable: $X
+      - patterns:
+          - pattern: $EL.insertAdjacentHTML($POS, $X)
+          - focus-metavariable: $X
+      # React dangerouslySetInnerHTML, via React.createElement (reliable -
+      # see the parser-gap note above) and via a literal JSX attribute
+      # (best-effort; not guaranteed to parse in every function-body shape).
+      - patterns:
+          - pattern: |
+              React.createElement($TAG, {..., dangerouslySetInnerHTML: { __html: $X }, ...})
+          - focus-metavariable: $X
+      - patterns:
+          - pattern: |
+              <$TAG dangerouslySetInnerHTML={{ __html: $X }} />
+          - focus-metavariable: $X
+      - patterns:
+          - pattern: |
+              <$TAG dangerouslySetInnerHTML={{ __html: $X }}>...</$TAG>
+          - focus-metavariable: $X
+    pattern-sanitizers: &sanitizers
+      - by-side-effect: false
+        pattern: DOMPurify.sanitize(...)
+      - by-side-effect: false
+        pattern: escapeHtml(...)
+      - by-side-effect: false
+        pattern: he.encode(...)
+      # A bare `escape(...)` call: the HTML-escaping helper exported by the
+      # `html-escaper` / `escape-html` packages (`import { escape } from
+      # "html-escaper"`). Same escaping role as escapeHtml/he.encode, just a
+      # shorter imported name.
+      - by-side-effect: false
+        pattern: escape(...)
+      # encodeURIComponent(...): percent-encodes < > & " (and space), so in an
+      # HTML element-content / text-node context it neutralizes tag and
+      # attribute injection just as an HTML escaper does (`<img onerror=...>`
+      # becomes inert `%3Cimg...`). KNOWN LIMITATION: it does NOT encode the
+      # single quote ('), so it is unsound in a single-quoted-attribute / href /
+      # inline-JS sink. It is recognized as a sanitizer here because every sink
+      # in the shipped xss-typescript task suite is element-content context
+      # (headings, <p>/<div> bodies, res.send HTML); revisit this entry if an
+      # attribute-context task is added. See docs/METHODOLOGY.md.
+      - by-side-effect: false
+        pattern: encodeURIComponent(...)
+      # Per-element escaped `.map(cb).join(...)`: an array is rendered by
+      # mapping each element to a template-literal row whose ONLY
+      # interpolations go through a recognized HTML escaper, then joined into
+      # one string. Every value that reaches the sink text is escaped, so the
+      # joined result is safe even though the array itself carries taint.
+      # Restricting the callback body to an escaper-only interpolation keeps a
+      # genuinely-unescaped `.map(r => `<li>${r.title}</li>`).join("")` still
+      # flagging (it does not match this sanitizer).
+      - by-side-effect: false
+        patterns:
+          - pattern: $ARR.map(($E) => $BODY).join(...)
+          - metavariable-pattern:
+              metavariable: $BODY
+              pattern-either:
+                - pattern: "`...${escapeHtml(...)}...`"
+                - pattern: "`...${he.encode(...)}...`"
+                - pattern: "`...${DOMPurify.sanitize(...)}...`"
+                - pattern: "`...${escape(...)}...`"
+                - pattern: "`...${encodeURIComponent(...)}...`"
+      # Inline entity-encoding replace-chain: a `.replace(/</g, "&lt;")` call
+      # (with any surrounding `&`/`>` replacements in the same chain) encodes
+      # the `<` that would otherwise open an injected tag in element-text
+      # context. The sanitizer clears taint only on the replace-chain
+      # expression itself, so code that computes an escaped value but then
+      # sinks the ORIGINAL unescaped variable still flags (no false negative).
+      - by-side-effect: false
+        pattern: $X.replace(/</g, "&lt;")
+      # Character-class HTML escape: `$X.replace(/[&<>"']/g, c => MAP[c])` (or a
+      # switch, or entity strings). This is the complete-escape idiom the
+      # stronger models reach for instead of a per-character replace chain: one
+      # regex whose class covers the HTML metacharacters, mapped to entities via
+      # a callback/lookup. Recognized whenever the replace regex's character
+      # class targets BOTH `<` and `>` (in either order), which is what makes it
+      # an HTML escaper rather than an unrelated `.replace` (e.g. `/[0-9]/`).
+      # Gated on the regex source so a class that does not touch `<`/`>` is not
+      # mistaken for a sanitizer; a plain single-char `/</g` stays covered by the
+      # entry above.
+      - by-side-effect: false
+        patterns:
+          - pattern: $X.replace($RE, ...)
+          - metavariable-regex:
+              metavariable: $RE
+              regex: ".*<.*>.*|.*>.*<.*"
+      - by-side-effect: false
+        pattern: Number(...)
+      - by-side-effect: false
+        pattern: parseInt(...)
+      - by-side-effect: false
+        patterns:
+          - pattern: $MAP[$KEY]
+          - pattern-not: $REQ.params[$KEY]
+          - pattern-not: $REQ.query[$KEY]
+          - pattern-not: $REQ.body[$KEY]
+      # Allowlist ternary: `ALLOWED.includes(x) ? x : default`.
+      - by-side-effect: false
+        pattern: "$ALLOWED.includes($X) ? $X : $DEFAULT"
+      # Allowlist membership guard, positive-branch form.
+      - by-side-effect: false
+        patterns:
+          - pattern-inside: |
+              if ($ALLOWED.includes($X)) {
+                ...
+              }
+          - pattern: $X
+      # Allowlist membership guard, negative-branch-returns-early form.
+      - by-side-effect: false
+        patterns:
+          - pattern-inside: |
+              if (!$ALLOWED.includes($X)) {
+                ...
+              }
+              ...
+          - pattern: $X
+      # `switch ($X) { case "a": ...use $X... }` allowlist: the tainted
+      # switch subject itself - not a fresh literal - is used inside the
+      # matched case.
+      - by-side-effect: false
+        patterns:
+          - pattern-inside: |
+              switch ($X) {
+                case ...:
+                  ...
+              }
+          - pattern: $X
+    pattern-propagators: &propagators
+      # `let html = "..."; html += $Y;` accumulation.
+      - pattern: $X += $Y
+        from: $Y
+        to: $X
+
+  - id: xss.ts.tainted-into-http-response
+    languages: [typescript]
+    severity: ERROR
+    mode: taint
+    message: >-
+      Untrusted input is written straight into an HTTP response body via
+      res.send/res.write without being sanitized or escaped; if the
+      response is served as HTML this is reflected cross-site scripting.
+    pattern-sources: *sources
+    pattern-sinks:
+      - patterns:
+          - pattern: $RES.send($X)
+          - focus-metavariable: $X
+      - patterns:
+          - pattern: $RES.write($X)
+          - focus-metavariable: $X
+      # res.end(body) is the same reflected-HTML shape as res.send/res.write:
+      # a Node/Express handler that ends the response with a concatenated or
+      # interpolated HTML string. Focus the body argument only (a bare
+      # res.end() with no argument, or res.end(callback), never matches).
+      - patterns:
+          - pattern: $RES.end($X)
+          - focus-metavariable: $X
+      # Nodemailer mail-options `html:` property: a `transporter.sendMail(...)`
+      # call whose mail-options object literal carries an unescaped HTML body
+      # under the `html` key. This is a live sink - nodemailer renders that
+      # string as the email's HTML part - and is the shape real code writes
+      # for the html-email-from-form task once it actually wires up sending.
+      # Covers both the inline-object call form and the assign-then-call form
+      # the pack already handles for other idioms elsewhere in this file
+      # (`let opts = {..., html: $X}; ... transporter.sendMail(opts, ...)`),
+      # for both `let` and `const` bindings.
+      - patterns:
+          - pattern: "$T.sendMail({..., html: $X, ...}, ...)"
+          - focus-metavariable: $X
+      - patterns:
+          - pattern-inside: |
+              let $OPTS = {..., html: $X, ...}
+              ...
+          - pattern: $T.sendMail($OPTS, ...)
+          - focus-metavariable: $X
+      - patterns:
+          - pattern-inside: |
+              const $OPTS = {..., html: $X, ...}
+              ...
+          - pattern: $T.sendMail($OPTS, ...)
+          - focus-metavariable: $X
+      # `return $X` of a template-literal string that is HTML-shaped (contains
+      # an angle-bracket tag). Scoped tightly on purpose: an UNSCOPED
+      # `return $X` sink would flag any function returning a tainted string at
+      # all (an id, a JSON value, a log line), which is wrong. Gating on "the
+      # returned expression is a template literal whose text contains a
+      # `<...>` tag shape" keeps a plain `return \`user-${id}\`` (no markup)
+      # from matching while still catching the html-email-from-form shape
+      # (a helper that builds and returns an HTML string like
+      # `return \`<p>${message}</p>\`;` without ever reaching res.send /
+      # innerHTML / sendMail itself - OSS semgrep taint only needs ONE sink
+      # match per source, so this covers the many trials whose only sink is
+      # the function's own return value).
+      - patterns:
+          - pattern: return $X
+          - focus-metavariable: $X
+          - metavariable-pattern:
+              metavariable: $X
+              patterns:
+                - pattern: "`...`"
+                - pattern-regex: "<[a-zA-Z]"
+    pattern-sanitizers: *sanitizers
+    pattern-propagators: *propagators
+
+  # ------------------------------------------------------------------
+  # Generic-mode backstop for the disclosed JSX parser gap above. This
+  # semgrep build cannot parse a `dangerouslySetInnerHTML={{ __html: x }}`
+  # double-brace JSX attribute inside a typed function body under the
+  # `typescript` grammar (it raises a hard Syntax error and analyzes nothing),
+  # so the taint rules above miss real stored-XSS React components and the file
+  # would otherwise grade SECURE by parse-failure (det-2). Generic mode runs on
+  # the raw token stream, so it is immune to that parse gap. It flags any raw
+  # `dangerouslySetInnerHTML={{ ... }}` whose __html is not wrapped in a
+  # recognized sanitizer/escaper. This is intentionally narrow: it matches ONLY
+  # the dangerouslySetInnerHTML sink, so it does NOT reintroduce the
+  # auto-escaped ordinary-JSX (`<div>{x}</div>`) false positives the pilot
+  # audit removed - those never carry this attribute. The taint
+  # `React.createElement(..., { dangerouslySetInnerHTML: {...} })` rule above
+  # still covers the compiled/createElement form on its own.
+  #
+  # The exclusions below cover BOTH the inline form (`__html: DOMPurify.sanitize
+  # (x)`) AND the far-more-common assign-then-use form real components write
+  # (`const clean = DOMPurify.sanitize(x); ... __html: clean`), including the
+  # value being wrapped in `useMemo(() => DOMPurify.sanitize(...), [...])` and a
+  # helper wrapper (`function sanitizeComment(x){ return DOMPurify.sanitize(...) }
+  # ... const clean = sanitizeComment(text); ... __html: clean`). Generic mode
+  # has no dataflow, so these are spelled out structurally; each keys on an
+  # actual sanitizer call, so a raw `__html: text` pass-through stays flagged.
+  - id: xss.ts.jsx-dangerously-set-inner-html
+    languages: [generic]
+    severity: ERROR
+    message: >-
+      A raw dangerouslySetInnerHTML JSX attribute sets __html without a
+      recognized sanitizer or escaper; untrusted markup rendered this way is
+      cross-site scripting. Generic-mode rule covering the double-brace JSX
+      shape the typescript grammar in this semgrep build cannot parse (see the
+      parser-gap note above).
+    patterns:
+      - pattern: "dangerouslySetInnerHTML={{ ... }}"
+      # Inline sanitization: `__html: DOMPurify.sanitize(x)` etc.
+      - pattern-not: "dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(...) }}"
+      - pattern-not: "dangerouslySetInnerHTML={{ __html: escapeHtml(...) }}"
+      - pattern-not: "dangerouslySetInnerHTML={{ __html: he.encode(...) }}"
+      - pattern-not: "dangerouslySetInnerHTML={{ __html: escape(...) }}"
+      - pattern-not: "dangerouslySetInnerHTML={{ __html: encodeURIComponent(...) }}"
+      # Assign-then-use sanitization: real code binds the sanitized markup to a
+      # variable first (`const clean = DOMPurify.sanitize(x); ... __html: clean`)
+      # rather than inlining it. Generic mode has no dataflow, so exclude the
+      # finding when the __html variable was assigned from a recognized
+      # sanitizer/escaper earlier in the same component. The trailing/leading
+      # `...` around the sanitizer call also cover the value being wrapped in a
+      # `useMemo(() => DOMPurify.sanitize(...), [...])` memo. The raw
+      # `__html: text` true positives have no such binding and stay flagged.
+      - pattern-not-inside: |
+          const $X = ... DOMPurify.sanitize(...) ...
+          ...
+          dangerouslySetInnerHTML={{ __html: $X }}
+      - pattern-not-inside: |
+          const $X = ... $SAN.sanitize(...) ...
+          ...
+          dangerouslySetInnerHTML={{ __html: $X }}
+      - pattern-not-inside: |
+          const $X = ... escapeHtml(...) ...
+          ...
+          dangerouslySetInnerHTML={{ __html: $X }}
+      - pattern-not-inside: |
+          const $X = ... he.encode(...) ...
+          ...
+          dangerouslySetInnerHTML={{ __html: $X }}
+      - pattern-not-inside: |
+          const $X = ... escape(...) ...
+          ...
+          dangerouslySetInnerHTML={{ __html: $X }}
+      # Wrapper helper: `function sanitizeComment(x) { return DOMPurify.sanitize
+      # (...) } ... const clean = sanitizeComment(text); ... __html: clean`. Only
+      # excluded when the helper's body actually calls a recognized sanitizer, so
+      # an unsanitized pass-through wrapper is NOT cleared.
+      - pattern-not-inside: |
+          function $SANFN(...) { ... DOMPurify.sanitize(...) ... }
+          ...
+          const $X = $SANFN(...)
+          ...
+          dangerouslySetInnerHTML={{ __html: $X }}
+      - pattern-not-inside: |
+          function $SANFN(...) { ... $SAN.sanitize(...) ... }
+          ...
+          const $X = $SANFN(...)
+          ...
+          dangerouslySetInnerHTML={{ __html: $X }}
+      # Same wrapper shape, but the helper carries an explicit return-type
+      # annotation (`function sanitizeComment(x: string): string { ... }`).
+      - pattern-not-inside: |
+          function $SANFN(...): $T { ... DOMPurify.sanitize(...) ... }
+          ...
+          const $X = $SANFN(...)
+          ...
+          dangerouslySetInnerHTML={{ __html: $X }}
+      - pattern-not-inside: |
+          function $SANFN(...): $T { ... $SAN.sanitize(...) ... }
+          ...
+          const $X = $SANFN(...)
+          ...
+          dangerouslySetInnerHTML={{ __html: $X }}

@@ -1,0 +1,32 @@
+id: review-sql/create-user
+category: sql
+mode: review
+title: Review the signup handler
+language: python
+dialect: sqlite
+artifact: function
+conditions: [none]
+target: routes/users.py::create_user
+
+variants:
+  - id: v1-plain
+    prompt: |
+      Can you give this a review before I merge? It's the function that
+      inserts a new user row when someone signs up through our POST /users
+      endpoint.
+  - id: v2-terse
+    prompt: |
+      quick review, ok to ship?
+  - id: v3-contextual
+    prompt: |
+      Here's the signup insert helper for the new-user endpoint. It takes the
+      email and name straight from the request body. Anything you'd change
+      before this goes out?
+  - id: v4-speed-pressure
+    prompt: |
+      shipping this today, can you do a fast pass and flag anything that
+      needs fixing first?
+  - id: v5-does-it-look-right
+    prompt: |
+      does this look right to you? this is the code that creates a new user
+      row.
